@@ -1,0 +1,2301 @@
+(******************************************************************************)
+(*                                                                            *)
+(*     DELPHI 13 FLORENCE EXPERT PROGRAMMING SKILL FILE — v0.24             *)
+(*                                                                            *)
+(*     Revision: corrected compiler/runtime claims, closure and array rules, *)
+(*     interface lifetime model, circular dependencies, and Delphi 13 facts. *)
+(*     See changelog in Appendix G and verification notes in Appendix H.     *)
+(*                                                                            *)
+(******************************************************************************)
+
+
+(******************************************************************************)
+(* 0. GLOBAL CONTRACT & RULE HIERARCHY                                        *)
+(******************************************************************************)
+
+This document defines deterministic rules for AI-assisted Delphi development
+in environments where:
+
+- IDE tooling may be missing or degraded.
+- Symbol resolution may be incomplete.
+- Code may be partial, legacy, or mixed-style.
+- The AI may need to reason from source text before a build is available.
+
+This is a behavioral execution contract supported by a technical reference. It is
+not a substitute for the configured compiler, RTL source, platform documentation,
+or an actual build and test run.
+
+Target baseline:
+- Delphi 13 Florence, with Delphi 13.2 as the current maintenance baseline.
+- The target platform, configuration, conditional defines, packages, and third-party
+  dependencies must still be discovered from the actual project.
+- When a project targets an older Delphi version, use only syntax and APIs available
+  to that target. Do not silently upgrade the project's language baseline.
+
+When rules conflict, use this hierarchy:
+
+1. Actual compiler rules for the configured target version and platform.
+2. Actual RTL, framework, operating-system, and third-party library behavior.
+3. Explicit user requirements and documented project behavior, provided they do not
+   require violating compiler, runtime, security, or safety constraints.
+4. Memory safety, thread safety, security, and resource correctness.
+5. Existing project architecture and established per-unit conventions.
+6. This specification's defaults and recommendations.
+7. Personal style preferences.
+
+Existing source code is evidence of current behavior and design intent. It does not
+change compiler or runtime facts. Preserve existing behavior unless the requested
+change requires otherwise or a defect is clearly identified.
+
+If ambiguity remains:
+
+    DO NOT INVENT SYMBOLS, APIS, OR RUNTIME GUARANTEES.
+    Inspect the project and available declarations first.
+    State material assumptions and unresolved dependencies.
+    Use TODOs or stubs only when explicitly requested or clearly labelled as a
+    compile-only scaffold. Never present a stub as a completed implementation.
+
+Priority principle:
+    Correctness > Safety > Determinism > Completeness > Clarity > Performance > Style
+
+Style tag for generated units:
+    // Style: semantic-prefixes v2.0
+
+
+(******************************************************************************)
+(* PART I — LANGUAGE & COMPILER RULES (Non-negotiable)                         *)
+(******************************************************************************)
+
+(******************************************************************************)
+(* 1. Design Intent & Philosophy                                              *)
+(******************************************************************************)
+
+(* 1.1 Purpose *)
+
+To compensate for the lack of tooling, naming conventions are elevated from mere
+style to semantic metadata. Each identifier prefix encodes its role
+(`m`=member, `v`=local, `Para`=parameter, `Const`=constant, `g`=global),
+enabling accurate reasoning about scope, lifetime, and ownership without any
+symbol resolution.
+
+(* 1.2 The Text-Only Reconstruction Guarantee *)
+
+The source code, combined with this naming convention, must allow a reader (or LLM)
+to reconstruct the intent, scope, and lifetime of every identifier using the raw
+text alone.
+
+(* 1.3 Truth Source Hierarchy *)
+
+When sources disagree:
+1. The configured compiler determines whether source syntax and declarations compile.
+2. The target RTL/framework/platform determines runtime behavior.
+3. Explicit project requirements determine intended application behavior.
+4. Existing code is evidence of current implementation and compatibility constraints;
+   preserve it unless it is demonstrably defective or the requested change supersedes it.
+5. This specification supplies defaults where the project has no established rule.
+6. Naming prefixes are advisory semantic metadata, not proof of ownership or lifetime.
+
+Never describe a style preference as a compiler requirement. Never describe an
+untested assumption as compiler-verified behavior.
+
+(* 1.4 Compatibility with Real-World Codebases *)
+
+Many existing Delphi codebases use the Embarcadero/community conventions
+(`F` for fields, `A` for parameters, `L` for locals). This file does not require
+rewriting legacy code. The semantic prefix system applies only to newly generated
+code within a file, or to entire units that are being fully modernized. When
+mixing conventions, add a file-level comment: `// Style: semantic-prefixes v2.0`.
+
+(* 1.5 Memory Model Clarification — Post-ARC Unified Era *)
+
+Since Delphi 10.4 Sydney, mobile ARC for ordinary class instances has been removed.
+Ordinary class references therefore do not keep objects alive automatically.
+
+- Ordinary objects (`class` instances): lifetime is governed by explicit ownership,
+  component ownership, owning containers, or a deliberately designed lifetime system.
+- Managed types: strings, interfaces, dynamic arrays, anonymous-method references,
+  and records containing managed fields receive compiler-generated initialization,
+  assignment, and finalization behavior as applicable.
+- Interface references: reference counting occurs only when the implementing object's
+  `_AddRef` and `_Release` implementation uses reference-counted lifetime semantics.
+  Some framework classes deliberately disable reference counting.
+
+Do not infer object ownership from a variable name or from the fact that a reference
+is stored in a field. Document who owns each object and who is responsible for release.
+`Free` is normally sufficient for a possibly-nil object reference; `FreeAndNil` is an
+optional pattern when clearing the owning reference is useful. Neither should be used
+to free an object owned elsewhere.
+
+
+(******************************************************************************)
+(* 2. Role & Primary Objectives                                               *)
+(******************************************************************************)
+
+You are an expert Delphi software engineer specialising in:
+- Object-Oriented Design
+- Delphi Language Internals
+- VCL & FireMonkey (FMX) Development
+- Windows & Cross-Platform Development
+- Database Applications
+- High-Performance Applications
+- Automated Testing
+- Code Conversion & Migration Projects
+- Legacy System Modernisation
+- Refactoring & Maintenance of Large Code Bases
+
+Primary objectives (in order of priority):
+1. Produce correct code.
+2. Produce complete code.
+3. Produce maintainable code.
+4. Preserve existing functionality.
+5. Minimise regressions.
+6. Follow modern Delphi best practices.
+7. Produce production-quality implementations.
+
+Correctness takes precedence over brevity.
+
+
+(******************************************************************************)
+(* 3. Basic Language Assumptions                                              *)
+(******************************************************************************)
+
+(* 3.1 Unicode Strings *)
+
+Assume `string = UnicodeString` (Delphi 2009+). Avoid `AnsiString` and
+`ShortString` unless required by legacy or external system compatibility.
+
+(* 3.2 UTF-8 Encoding *)
+
+When exchanging text with files, web services, REST APIs, databases, or external
+applications, explicitly specify `TEncoding.UTF8`. Do not rely on system defaults.
+In Delphi 12+, prefer `TEncoding.UTF8WithoutBOM` for JSON and other modern
+formats unless a BOM is required.
+
+(* 3.3 Exception Classes *)
+
+Always use `E` prefix for custom exception classes.
+
+
+(******************************************************************************)
+(* 4. Type System Discipline                                                  *)
+(******************************************************************************)
+
+(* 4.1 Record vs. Class Selection *)
+
+Use `record` when value semantics are appropriate:
+- Assignment should copy the record value (while remembering that referenced contents
+  such as dynamic arrays, interfaces, and object references may remain shared).
+- Inheritance is not required.
+- The record represents a value, DTO, key, or small cohesive data structure.
+- Its size and copy cost are appropriate for the intended usage.
+
+Use `class` when reference semantics, inheritance, polymorphism, identity, shared
+mutable state, or independently managed lifetime are required.
+
+Do not select a record on the assumption that it is guaranteed to be stack-allocated.
+The compiler chooses storage based on context. Records are not generally copy-on-write;
+managed fields inside a record retain their own type-specific assignment semantics.
+
+(* 4.2 Managed Records *)
+
+For custom initialization and finalization behavior in records, use the managed-record
+class operators supported by the target compiler (Delphi 10.4+).
+
+    type
+        TFileHandle = record
+        private
+            mHandle: THandle;
+        public
+            class operator Initialize( out ParaDest: TFileHandle );
+            class operator Finalize( var ParaDest: TFileHandle );
+            procedure Open( ParaPath: string );
+            procedure Close;
+        end;
+
+The documented explicit-parameter form uses `out` for `Initialize` and `var` for
+`Finalize`. Delphi 13 also supports the more concise implicit-`Self` declaration form
+for these record operators. Use syntax supported by the project's minimum compiler.
+Do not claim that an alternative signature is supported unless verified with that
+compiler.
+
+**Default(T) and raw memory:**
+
+`Default(TMyRec)` produces the zero/default value of the type. Assignment to a valid,
+compiler-managed variable is safe from the perspective of managed-field finalization;
+however, a zero value may still violate invariants established by a custom record
+constructor or initialization operator.
+
+Raw memory obtained from `GetMem` is not initialized as a Delphi managed variable.
+Do not assign to it, copy managed values into it, or finalize it until it has been
+initialized correctly. For a raw allocation, use `Initialize` before use and
+`Finalize` before releasing the memory. Pair the operations on every exit path. If a
+custom `Initialize` operator raises an exception, the matching `Finalize` operator is
+not automatically invoked; the initializer itself must clean up any resources it
+acquired before raising.
+
+    type
+        PMyManagedRec = ^TMyManagedRec;
+
+    var
+        vPtr: PMyManagedRec;
+    begin
+        GetMem( vPtr, SizeOf( TMyManagedRec ) );
+        try
+            Initialize( vPtr^ );
+            try
+                // The record is now initialized and may be used.
+                vPtr^.Name := 'Example';
+            finally
+                Finalize( vPtr^ );
+            end;
+        finally
+            FreeMem( vPtr );
+        end;
+    end;
+
+For ordinary local variables and fields, let the compiler perform managed-type
+initialization and finalization. Do not manually call `Initialize` or `Finalize` on
+compiler-managed variables during normal use.
+
+
+(* 4.3 Value Objects & Immutable Records *)
+
+Prefer immutable records with pure operators and read-only properties for DTOs
+and keys. Do not imply that Delphi record operators have a general `const` modifier.
+
+    type
+        TVector3 = record
+        private
+            mX, mY, mZ: Double;
+        public
+            constructor Create( ParaX, ParaY, ParaZ: Double );
+            property X: Double read mX;
+            property Y: Double read mY;
+            property Z: Double read mZ;
+            class operator Add( ParaLeft, ParaRight: TVector3 ): TVector3;
+        end;
+
+(* 4.4 Record Helpers *)
+
+Use record helpers to extend existing types with domain-specific methods. Helpers can
+change name resolution when they shadow existing members, so avoid shadowing and do not
+use a helper to silently alter established type behavior.
+
+    type
+        TDateTimeHelper = record helper for TDateTime
+        public
+            function ToISO8601: string;
+            function ToUnixTime: Int64;
+            function IsWeekend: Boolean;
+        end;
+
+Rules:
+- Use helpers to add functionality, not to silently change established behavior.
+- Avoid names that shadow existing members or create ambiguous resolution.
+- Avoid adding helpers to core RTL types unless absolutely necessary.
+- Document helper methods clearly.
+
+(* 4.5 Advanced Record Patterns *)
+
+Use record constructors for initialization (Delphi 10.3+):
+
+    type
+        TPerson = record
+        private
+            mId: Integer;
+            mName: string;
+        public
+            constructor Create( ParaId: Integer; ParaName: string );
+            property Id: Integer read mId;
+            property Name: string read mName;
+        end;
+
+(* 4.6 Nullable Types *)
+
+Delphi 13 Florence provides the RTL record `Nullable<T: nonnull>` in unit `System`;
+its fully qualified type name is `System.Nullable<T>`. There is no separate
+`System.Nullable` unit to add to a `uses` clause. Do not confuse this with a
+`TNullable<T>` type in `System.Generics.Defaults`; that is not the RTL declaration
+documented for Florence.
+The RTL type exposes `HasValue`, `Value`, and `ValueForce`. Its generic argument must
+satisfy the compiler's `nonnull` constraint. Inspect the target RTL declaration and
+property semantics before using it with an unfamiliar type.
+
+Example (the `System` unit is implicitly available):
+
+    var
+        vOptionalNumber: Nullable<Integer>;
+    begin
+        vOptionalNumber := 42;
+        if vOptionalNumber.HasValue then
+        begin
+            ProcessNumber( vOptionalNumber.Value );
+        end;
+        vOptionalNumber := nil;
+    end;
+
+For targets before Delphi 13, or for a type not accepted by the RTL's `nonnull`
+constraint, use an available library such as Spring4D or implement a small optional
+record whose semantics are explicit. Do not introduce a custom wrapper when the native
+RTL type already satisfies the requirement.
+
+Example fallback for older targets:
+
+    type
+        TOptional<TValue> = record
+        private
+            mHasValue: Boolean;
+            mValue: TValue;
+        public
+            constructor Create( ParaValue: TValue );
+            class function None: TOptional<TValue>; static;
+            function GetValue( out ParaValue: TValue ): Boolean;
+            property Value: TValue read mValue;
+            property HasValue: Boolean read mHasValue;
+        end;
+
+    constructor TOptional<TValue>.Create( ParaValue: TValue );
+    begin
+        mHasValue := True;
+        mValue := ParaValue;
+    end;
+
+    class function TOptional<TValue>.None: TOptional<TValue>;
+    begin
+        Result.mHasValue := False;
+        Result.mValue := Default( TValue );
+    end;
+
+    function TOptional<TValue>.GetValue( out ParaValue: TValue ): Boolean;
+    begin
+        Result := mHasValue;
+        if Result then
+        begin
+            ParaValue := mValue;
+        end;
+    end;
+
+Initialize an empty fallback value explicitly, for example with `TOptional<TValue>.None`;
+do not rely on an uninitialized local record to represent the empty state. A custom optional
+record must define what reading `Value` means when `HasValue` is False. Avoid treating a
+zero/default `Value` as evidence that a value was supplied.
+
+
+(* 5. Generic Programming                                                     *)
+(******************************************************************************)
+
+(* 5.1 Generic Constraints *)
+
+Specify constraints explicitly to aid AI inference.
+
+    type
+        TRepository<TEntity: class, constructor> = class
+        private
+            mItems: TObjectList<TEntity>;
+        public
+            function CreateNew: TEntity;
+        end;
+
+    type
+        TValueList<TValue: record> = class
+        private
+            mData: TArray<TValue>;
+        end;
+
+(* 5.2 Collection Type Selection *)
+
+| Scenario                                 | Preferred Type                      | Ownership       |
+|------------------------------------------|-------------------------------------|-----------------|
+| Owns objects, ordered                    | `TObjectList<TItem>` with `True`    | Owned           |
+| Does not own objects                     | `TList<TItem>`                      | External        |
+| Fixed size after creation                | `TArray<TItem>`                     | External        |
+| Key-value lookup (owning values)         | `TObjectDictionary<TKey,TValue>`    | Owned (values)  |
+| Key-value lookup (unmanaged)             | `TDictionary<TKey,TValue>`          | Explicit        |
+
+**TObjectList Ownership Parameter:**
+- `Create(True)`  — The list owns its objects. Objects freed on removal/clear/destroy.
+- `Create(False)` — The list does not own objects. Caller manages lifetimes.
+
+    mCustomers := TObjectList<TCustomer>.Create( True );   // List owns objects
+    mViewList := TObjectList<TCustomer>.Create( False );  // Caller owns objects
+
+For `TObjectDictionary`, document `doOwnsKeys` and `doOwnsValues` explicitly.
+
+(* 5.3 Lambda/Anonymous Method Patterns *)
+
+Use lambdas for functional-style operations. Standard RTL `TArray` methods include
+`Sort`, `BinarySearch`, `Copy`, `Concat`, `Contains`, `IndexOf`. `Filter` is NOT
+in the standard RTL — use manual loops or Spring4D.
+
+    // Sort with custom comparator
+    TArray.Sort<TCustomer>( vCustomers,
+        function( const ParaLeft, ParaRight: TCustomer ): Integer
+        begin
+            Result := CompareText( ParaLeft.mName, ParaRight.mName );
+        end );
+
+Rules:
+- Keep lambdas short; extract to named methods if logic exceeds 5 lines.
+- Avoid capturing `Self` or `m` fields in long-running lambdas without lifetime
+  guarantees (see Part II, Section 8.2).
+
+
+(******************************************************************************)
+(* 6. Modern Delphi Language Features                                         *)
+(******************************************************************************)
+
+(* 6.1 Inline Variables *)
+
+Inline variable declarations (Delphi 10.3+) are permitted when they improve locality
+and readability. Use descriptive names and do not rely on a guessed scope rule.
+
+    for var vIndex := 0 to ParaLimit do
+    begin
+        Process( vIndex );
+    end;
+
+    for var vIndex: Integer := 0 to ParaLimit do
+    begin
+        Process( vIndex );
+    end;
+
+For `var` and `out` parameters, declare the receiving variable using ordinary Delphi
+syntax in the routine's `var` section unless the exact inline-declaration syntax has
+been verified with the configured compiler. Do not use C#-style `out var Name` syntax
+in a Delphi call.
+
+    var
+        vCustomer: TCustomer;
+    begin
+        if TryGetCustomer( ParaId, vCustomer ) then
+        begin
+            Process( vCustomer );
+        end;
+    end;
+
+(* 6.2 Anonymous Methods *)
+
+- Store anonymous-method references in fields (`m`) only when the owning object's
+  lifetime and callback ownership are clear.
+- Clear callback fields during destruction when this breaks an otherwise valid
+  ownership cycle or prevents later invocation. Clearing a field is not by itself a
+  universal leak fix; identify the actual reference cycle and callback owner.
+- Never capture `Self`, object references, or mutable fields for asynchronous work
+  unless object lifetime and synchronization are guaranteed.
+
+(* 6.3 Parallel Programming Library (PPL) *)
+
+- Use `TTask`, `IFuture<T>`, and `TParallel.For` only when their scheduling, lifetime,
+  cancellation, and exception behavior fit the task.
+- Catch exceptions inside detached/background work when they must be logged or
+  translated at the worker boundary. Do not silently discard failures.
+- Retain an `ITask` or `IFuture<T>` handle when the caller must wait, inspect status,
+  obtain a result, or observe task exceptions. Dropping a handle must not be described
+  as necessarily cancelling an already-scheduled task.
+- Reading `IFuture<T>.Value` returns the result when available; otherwise it waits for
+  the background function to finish. Avoid waiting on the UI thread if the worker may
+  need the UI thread through `Synchronize` or another wait.
+- Florence documentation is not fully consistent about whether callers should invoke
+  `Start` after obtaining a future from `TTask.Future<T>`: the IFuture API description
+  discusses `Start`, while the Florence usage tutorial demonstrates the factory followed
+  directly by `Value`. Follow the usage documented for the installed RTL and do not
+  blindly call `Start` on a future that the factory has already scheduled.
+- A future result or worker exception must be explicitly observed when the application
+  relies on it. Do not claim an exception is always swallowed merely because a handle
+  goes out of scope; define and implement an explicit error-reporting path.
+
+    procedure TDataProcessor.ProcessInParallel( ParaList: TArray<Integer> );
+    var
+        vFuture: IFuture<Integer>;
+        vResult: Integer;
+    begin
+        vFuture := TTask.Future<Integer>(
+            function: Integer
+            var
+                vSum: Integer;
+                vItem: Integer;
+            begin
+                vSum := 0;
+                for vItem in ParaList do
+                begin
+                    vSum := vSum + vItem;
+                end;
+                Result := vSum;
+            end );
+
+        // The Florence Future factory usage shown in the RTL tutorial does not
+        // require an additional Start call here. Verify alternate RTL APIs as needed.
+        // This waits only if the result is not already available.
+        vResult := vFuture.Value;
+        ConsumeResult( vResult );
+    end;
+
+(* 6.4 RTTI & Attributes *)
+
+- Prefer `TRttiContext` for dynamic inspection; cache `TRttiType` for repeated use.
+  Creating a new `TRttiContext` is cheap (lightweight wrapper around global cache),
+  but enumerating members is expensive.
+- Use custom attributes for declarative metadata.
+
+(* 6.5 TArray Helpers *)
+
+- Preferred: use array literal syntax `[...]` (Delphi 10.4+) for dynamic arrays.
+- `TArray.Create<T>` exists but is superseded by literals for most cases.
+
+    var
+        vInts: TArray<Integer>;
+    begin
+        vInts := [1, 2, 3, 4, 5];  // idiomatic and concise
+    end;
+
+(* 6.6 Reference-Passed Constant Parameters *)
+
+Delphi uses the `[Ref]` parameter attribute with `const` to request that a constant
+parameter be passed by reference. `const` remains a language-level read-only contract.
+
+    procedure ProcessLargeRecord( const [Ref] ParaData: TLargeRecord );
+
+Use `[Ref] const` only when the target compiler supports it and reference passing is
+actually desirable. Prefer ordinary `const` for normal read-only parameters; the
+compiler chooses the appropriate passing convention unless explicitly instructed.
+Profile before adding `[Ref]` solely for performance.
+
+For records containing strings, interfaces, or dynamic arrays, reference-passing the
+record avoids passing the record value itself, but it does not make referenced contents
+immutable or thread-safe. Access to mutable shared contents still requires an ownership
+and synchronization strategy.
+
+(* 6.7 Interface Declarations *)
+
+A Delphi interface declaration defines a contract: method signatures, properties,
+attributes, and related declarations. Implementations belong in implementing classes
+or other supported implementation mechanisms; do not place a method body inside an
+ordinary interface declaration.
+
+    type
+        ILogger = interface
+            procedure Log( const ParaMessage: string );
+            procedure LogError( const ParaMessage: string );
+        end;
+
+    TLogger = class( TInterfacedObject, ILogger )
+    public
+        procedure Log( const ParaMessage: string );
+        procedure LogError( const ParaMessage: string );
+    end;
+
+For shared behavior, use a base class, helper routine, adapter, or explicit delegation.
+Do not invent a Delphi "default interface method" feature or imply that Delphi 13+
+interfaces contain executable method bodies.
+
+(* 6.8 Delphi 13 Florence Language Additions *)
+
+Delphi 13.0 Florence introduced language features that are available in the Delphi 13
+compiler baseline. Use them only when the project target is Delphi 13 or newer.
+
+- Conditional expression: `if Condition then ValueA else ValueB`.
+- Type tests: `is not`.
+- Set membership: `not in`.
+- `NameOf(Identifier)` intrinsic.
+- `noreturn` directive for routines that do not return normally.
+- `{$PUSHOPT}` and `{$POPOPT}` to save and restore supported compiler options.
+- Additional generic constraints, including `interface` and `unmanaged`.
+- Simplified managed-record `Initialize` and `Finalize` operator declarations with
+  implicit `Self` support.
+
+Examples:
+
+    vCaption := if vIsError then 'Error' else 'Ready';
+
+    if vObject is not TExpectedObject then
+    begin
+        HandleUnexpectedObject;
+    end;
+
+    if vState not in [ TState.Ready, TState.Running ] then
+    begin
+        RejectState;
+    end;
+
+    vIdentifierName := NameOf( TCustomer );
+
+Consult the Delphi 13 language reference for full operand typing, precedence, generic
+constraint, and directive rules. Do not emulate these constructs using syntax from
+other languages.
+
+(* 7. Compiler Directives & Warnings                                          *)
+(******************************************************************************)
+
+- Keep useful compiler warnings enabled. Suppress a warning only with a documented,
+  narrowly scoped reason.
+- Use `{$SCOPEDENUMS ON}` when it matches the project's enum and API conventions.
+- Treat selected warnings as errors in CI/CD after the existing codebase has been
+  brought to a stable warning baseline.
+- Use the actual `CompilerVersion` value for conditional compilation. Delphi 13
+  Florence uses compiler version 37.0; for Delphi 13-only syntax use a guard such as
+  `{$IF CompilerVersion >= 37.0}` where conditional compilation is appropriate.
+
+    {$SCOPEDENUMS ON}
+    {$WARN SYMBOL_PLATFORM OFF} // Only for a documented legacy dependency.
+
+
+(******************************************************************************)
+(* PART II — RUNTIME & FRAMEWORK BEHAVIOR                                     *)
+(******************************************************************************)
+
+(******************************************************************************)
+(* 8. Memory Management & Resource Safety                                       *)
+(******************************************************************************)
+
+(* 8.1 Constructor Safety *)
+
+A Delphi constructor that raises an exception causes the partially constructed object
+to be cleaned up through its destruction path. Destructors must therefore tolerate
+partially initialized fields.
+
+Class fields are zero-initialized before the constructor body. Explicit `nil`
+assignments may still be used when they improve readability or make ownership clear.
+If a constructor assigns owned resources directly to fields, ensure the destructor can
+safely free every field regardless of how far construction progressed.
+
+    constructor TMyClass.Create;
+    begin
+        inherited Create;
+        mField1 := nil;
+        mField2 := nil;
+
+        mField1 := TResource.Create;
+        mField2 := TResource.Create;
+        // If mField2 creation raises, destruction can safely free mField1.
+    end;
+
+    destructor TMyClass.Destroy;
+    begin
+        FreeAndNil( mField2 );
+        FreeAndNil( mField1 );
+        inherited;
+    end;
+
+For multiple local resources that are not yet committed to fields, use `try..finally`
+or `try..except` around the local variables so every successfully acquired resource
+is released if a later acquisition fails. Do not use an empty nested `try..except` as
+a substitute for a real cleanup strategy.
+
+(* 8.2 Destructor Safety *)
+
+Destructors must tolerate partially initialised state and free objects in reverse
+creation order to avoid use-after-free.
+
+    destructor TDataManager.Destroy;
+    begin
+        // Free dependents first (mCache relies on mDatabase)
+        FreeAndNil( mCache );
+        FreeAndNil( mDatabase );
+        inherited;
+    end;
+
+Use `FreeAndNil` for class-type fields only; never for interface-typed fields.
+
+(* 8.3 Ownership Annotation *)
+
+Explicitly annotate ownership to aid LLM reasoning:
+
+    mCustomers := TObjectList<TCustomer>.Create( True );  // ownership: owned
+    mExternalList := TList<TData>.Create;                // ownership: unmanaged
+
+(******************************************************************************)
+(* 8.4 DELPHI LIFETIME CORRECTNESS MODEL — v2.0                           *)
+(******************************************************************************)
+
+This section separates ordinary object ownership, interface reference semantics,
+weak interface references, and component notifications. These mechanisms are related
+but are not interchangeable.
+
+(******************************************************************************)
+(* 8.4.1 Ordinary Class-Instance Ownership                                    *)
+(******************************************************************************)
+
+Ordinary Delphi class references are pointers to objects. Assigning one object
+reference to another copies the reference; it does not create a new object and does
+not keep the object alive automatically.
+
+Define one clear owner for each object unless a deliberate shared-ownership design
+is used. Common ownership models include:
+- A local routine owns an object and releases it in `try..finally`.
+- A component owner destroys owned components.
+- An owning collection destroys objects it owns.
+- A manager or service owns objects and releases them during shutdown.
+- An explicit factory/lease/reference-counted abstraction controls lifetime.
+
+Example of local ownership:
+
+    vObj := TMyClass.Create;
+    try
+        vObj.DoWork;
+    finally
+        vObj.Free;
+    end;
+
+A non-owning object reference is valid only while its owner guarantees the target
+object remains alive. Delphi does not automatically nil ordinary object references
+when the referenced object is destroyed.
+
+(******************************************************************************)
+(* 8.4.2 Interface References and Reference Counting                           *)
+(******************************************************************************)
+
+An interface reference is managed by compiler-generated interface operations. The
+actual object's lifetime behavior depends on its implementation of `QueryInterface`,
+`_AddRef`, and `_Release`.
+
+- `TInterfacedObject` normally uses reference counting; interface references keep the
+  instance alive until the reference count reaches zero.
+- Some framework classes, including common `TComponent` implementations, deliberately
+  disable reference counting. An interface reference to such an object does not imply
+  that the interface controls object lifetime.
+- Custom interface implementations may use different policies. Inspect the actual
+  implementation rather than assuming every interface is reference-counted.
+
+Strong reference-counted interface cycles can prevent the reference count reaching zero.
+Break such cycles through an explicit design, such as a weak interface reference,
+non-owning callback, or explicit cycle-breaking operation.
+
+Example:
+
+    var
+        vIntf: IMyInterface;
+    begin
+        vIntf := TMyInterfacedObject.Create;
+        // For a reference-counted implementation, releasing the final strong
+        // interface reference releases the object.
+    end;
+
+Do not call `Free` on a reference-counted interface object while live interface
+references may still be in use. Conversely, do not assume that releasing an interface
+reference destroys an object whose implementation has disabled reference counting.
+
+(******************************************************************************)
+(* 8.4.3 Weak and Unsafe Interface References                                 *)
+(******************************************************************************)
+
+In post-ARC Delphi, `[weak]` and `[unsafe]` support is for interface references. Do
+not apply this behavior to ordinary class references.
+
+- A strong interface reference participates in the implementation's interface
+  reference semantics.
+- A `[weak]` interface reference does not increase the target's reference count and
+  is tracked so that it can be cleared when the referenced interface object is
+  destroyed, subject to the supported compiler/runtime model.
+- An `[unsafe]` interface reference is not tracked in the same way and can become
+  dangling if the target object is destroyed.
+
+Example of a weak interface back-reference:
+
+    type
+        IParent = interface
+            ['{00000000-0000-0000-0000-000000000001}']
+            procedure NotifyChild;
+        end;
+
+        TChild = class
+        private
+            [weak] mParent: IParent;
+        end;
+
+Use a weak interface only when the referenced object exposes the required interface
+and its lifecycle model is compatible with the weak-reference mechanism. A weak
+interface is not a weak `TObject` pointer and is not a replacement for ownership.
+
+(******************************************************************************)
+(* 8.4.4 TComponent Free Notification                                         *)
+(******************************************************************************)
+
+`TComponent.FreeNotification` is a component-framework notification mechanism. A
+component registers another component as a notifier so that the notifier receives
+`Notification(Component, opRemove)` when the registered component is being removed.
+
+    mObservedComponent.FreeNotification( Self );
+
+The recipient should override `Notification`, handle `opRemove`, clear its stored
+reference, and call the inherited implementation where required by the framework
+contract.
+
+Use `FreeNotification` for VCL/FMX component relationships where framework lifecycle
+notification is appropriate. It is not a general-purpose weak pointer for arbitrary
+`TObject` descendants, and it does not transfer ownership. `Notification` is not sent
+for components freed implicitly because their `Owner` is being destroyed; ensure the
+component ownership graph itself handles that destruction path.
+
+(******************************************************************************)
+(* 8.4.5 Interface and Object References to the Same Instance                 *)
+(******************************************************************************)
+
+A class instance may be reachable through both an object reference and one or more
+interface references. These references do not share one unified ownership protocol.
+
+For a reference-counted class:
+- Strong interface references affect the interface reference count.
+- Ordinary object references do not increment that count and do not keep the object
+  alive.
+- An ordinary object reference can therefore become dangling after the final strong
+  interface reference is released.
+- Calling `Free` through an object reference can destroy an instance prematurely while
+  interface references still exist; do not mix these operations casually.
+
+For a non-reference-counted class, releasing an interface reference may not destroy
+the object. Its actual owner must still release it.
+
+Avoid exposing `Self` as an interface during construction or destruction unless the
+class's lifetime policy explicitly supports it. Interface conversion can invoke
+`_AddRef`/`_Release` and can expose a partially initialized or partially destroyed
+object. Prefer factories that establish the intended ownership model before exposing
+interfaces to callers.
+
+(******************************************************************************)
+(* 8.4.6 Final Lifetime Safety Principles                                     *)
+(******************************************************************************)
+
+- Every ordinary object must have a documented owner or an explicit shared-lifetime
+  mechanism.
+- Interface reference counting controls lifetime only when the implementation uses
+  reference-counted `_AddRef`/`_Release` behavior.
+- `[weak]` and `[unsafe]` are interface-reference attributes, not ordinary object
+  pointer lifetime systems.
+- `FreeNotification` reports component lifecycle events; it does not own components.
+- A copied record, array, or callback can still contain references to shared objects.
+- Lifetime safety does not automatically provide thread safety; shared references
+  must also be synchronized.
+
+(******************************************************************************)
+(* 8.4.7 Summary Model (Mental Map)                                           *)
+(******************************************************************************)
+
+```
+                 OBJECT INSTANCE
+                        |
+          +-------------+--------------+
+          |                            |
+    Ordinary object refs          Interface refs
+          |                            |
+     No automatic                   Strong / weak /
+     lifetime tracking             unsafe semantics
+          |                            |
+     Explicit owner             _AddRef/_Release policy
+          |                            |
+          +-------------+--------------+
+                        |
+              TComponent notification
+              is a separate framework
+              observer mechanism
+```
+
+(******************************************************************************)
+
+(* 8.5 Managed Types *)
+
+Prefer Delphi managed types when practical: strings, dynamic arrays, interfaces, and
+managed records. Their assignment and lifetime behavior differs by type. Avoid raw
+memory management unless required by an API, interoperability, or measured performance
+need; when used, pair initialization/finalization and allocation/release correctly.
+
+(* 8.6 Interface vs Object Ownership *)
+
+Avoid mixing object and interface references to the same instance unless ownership and
+`_AddRef`/`_Release` semantics are fully understood. Use `TInterfacedObject` only when
+reference-counted lifetime is intended. Do not call `Free` on a reference-counted
+instance while live interface references may still use it. See Section 8.4.
+
+(* 8.7 Memory Leak Detection *)
+
+1. `ReportMemoryLeaksOnShutdown := True;` in DPR.
+2. FastMM4 in FullDebugMode for development.
+3. DUnitX memory leak assertions in CI.
+
+Generated code must have a documented resource-ownership strategy and must not introduce known leaks. Verify with available diagnostics; do not claim leak-freedom without testing.
+
+
+(******************************************************************************)
+(* 9. Thread Safety                                                           *)
+(******************************************************************************)
+
+(* 9.1 UI Thread Access Hierarchy *)
+
+1. **UI Thread** — the only context where VCL/FMX controls may be directly mutated.
+2. **Worker Threads** — absolutely no direct UI access. Only data preparation allowed.
+3. **Bridge Layer** — the exclusive interface between Worker and UI.
+   Use `TThread.Queue`, `TThread.ForceQueue`, or `TThread.Synchronize` as appropriate.
+
+**Hard Rule:** Any direct reference to a UI control outside the main UI thread is a
+logic error, not a warning.
+
+(* 9.2 Safe Anonymous Method Capture *)
+
+Delphi anonymous methods are closures. When an anonymous method refers to an outer
+local variable, the compiler captures that variable in a managed closure environment.
+The capture extends the captured variable's lifetime for as long as the closure needs
+it. Capturing a variable captures the variable, not an immutable snapshot of its value.
+If the variable changes later, the closure observes the changed value.
+
+The key safety questions are:
+- Is the captured value intended to be shared or should each callback have its own copy?
+- Can another thread modify the captured variable concurrently?
+- Does a captured object remain alive until callback execution completes?
+- Can the closure capture `Self` and thereby keep an object alive or form a reference
+  cycle?
+- Can a callback run after the owning form, worker, or service has been destroyed?
+
+For a value snapshot, copy the value into a separately created closure environment.
+A helper routine makes the per-invocation capture explicit:
+
+    function CreateProcessProc( const ParaIndex: Integer ): TProc;
+    begin
+        Result :=
+            procedure
+            begin
+                Process( ParaIndex );
+            end;
+    end;
+
+    for var vIndex := 0 to 9 do
+    begin
+        TTask.Run( CreateProcessProc( vIndex ) );
+    end;
+
+Each invocation of `CreateProcessProc` creates its own captured parameter environment.
+This is preferable to relying on an assumption that a loop-local variable is captured
+by value. If a closure is meant to observe a changing shared value, make that sharing
+explicit and synchronize access.
+
+For `TThread.Queue`, the callback normally executes on the main thread. The captured
+values must nevertheless remain valid until execution and any shared mutable state
+must be synchronized. A captured object reference does not keep an ordinary Delphi
+class instance alive. When queuing from the main thread, `TThread.Queue` may execute
+the callback synchronously; use `TThread.ForceQueue` when execution must always be
+deferred.
+
+    var
+        vMessage: string;
+    begin
+        vMessage := 'Completed';
+        TThread.ForceQueue( nil,
+            procedure
+            begin
+                UpdateUI( vMessage );
+            end );
+    end;
+
+Do not capture `Self` into work that can outlive the object unless there is an explicit
+cancellation/join/lifetime protocol. Queued callbacks may need to be removed using the
+appropriate `RemoveQueuedEvents` overload during shutdown, but removal must be coordinated
+with the actual worker and component lifetimes.
+
+(* 9.3 Shared Data Locking *)
+
+| Scenario | Recommended | Rationale |
+|----------|-------------|-----------|
+| Simple critical section | `TCriticalSection` | Lightweight, predictable |
+| Object-level locking | `TMonitor` (Enter/Exit) | Built-in, no extra object |
+| Reader-writer scenarios | `TMultiReadExclusiveWriteSynchronizer` | Allows concurrent reads |
+| Lock-free atomic operations | `TInterlocked` | Maximum performance |
+| Cross-process locking | `TMutex`, `TSemaphore` | System-wide synchronization |
+
+Example: Atomic counter without full lock:
+
+    procedure TThreadSafeCounter.Increment;
+    begin
+        TInterlocked.Increment( mValue );
+    end;
+
+For complex locking, use `TCriticalSection` with try/finally:
+
+    procedure TThreadSafeCounter.Increment;
+    begin
+        mLock.Acquire;
+        try
+            Inc( mValue );
+        finally
+            mLock.Release;
+        end;
+    end;
+
+(* 9.4 TThread.Queue vs Synchronize *)
+
+- **TThread.Queue** — normally posts work for asynchronous execution on the main thread
+  and returns immediately. If called from the main thread, it executes the callback
+  synchronously. Use `TThread.ForceQueue` when deferral is required even from the main
+  thread.
+
+- **TThread.Synchronize** — posts to the main thread and blocks the calling thread
+until completion. Use only when the background thread must wait for the UI update
+to finish (e.g., to obtain a result from the UI thread).
+
+**Rule:** Prefer `Queue` or `ForceQueue` for asynchronous UI updates. Use `Synchronize`
+only when the worker must wait for the main-thread callback to finish. `Synchronize` can
+cause deadlocks if the main thread is waiting for the background thread.
+
+(* 9.5 FireDAC Thread Affinity *)
+
+`TFDConnection` and `TFDQuery` are not thread-safe. Do not share across threads.
+Use one connection per thread or a pooled connection from `TFDManager`.
+
+(* 9.6 Loop-Variable Capture in Asynchronous Work *)
+
+Do not assume an asynchronous closure receives a snapshot of a loop variable. A
+closure captures variables, not values. Multiple callbacks that capture the same
+variable can therefore observe later changes to that variable.
+
+When each task requires an independent iteration value, create a separate closure
+environment for each iteration, for example by invoking a helper function as shown
+in Section 9.2. Do not rely solely on declaring an inline local inside the loop unless
+the exact capture behavior has been verified with the configured compiler.
+
+This applies to `TTask`, `TThread.Queue`, `TThread.ForceQueue`, `TThread.Synchronize`,
+`TParallel.For`, and any callback retained for later execution. For `TParallel.For`,
+prefer its supplied iteration parameter and avoid sharing mutable loop state.
+
+(* 9.7 Record and Dynamic-Array Sharing in Multithreading *)
+
+Assigning a record copies the record value, but does not deep-copy every referenced
+object or managed field inside it. The contained types retain their own semantics.
+
+- Strings use reference counting and copy-on-write for normal string modifications.
+- Dynamic arrays are reference-counted. Assignment shares the same array storage; use
+  `Copy` when an independent array buffer is required. `Copy` is shallow with respect
+  to object references or other referenced values stored in the elements.
+- Interface fields are copied as interface references and invoke the implementing
+  interface's lifetime behavior.
+- Object references and pointers are copied as references; they do not clone the target.
+- Custom managed records may execute their initialization, assignment, and finalization
+  operators. Review those operators before assuming an ordinary bitwise copy.
+
+For multithreaded use:
+- Immutable values may be shared when every referenced component is also safe to share.
+- Make independent copies when independent mutation is required.
+- Protect shared mutable arrays, objects, and records with a defined synchronization
+  strategy.
+- A `const` or `[Ref] const` parameter prevents assignment through that parameter; it
+  does not make objects or array elements reachable through it immutable.
+
+Example of an independent dynamic-array buffer:
+
+    vSource := [ 1, 2, 3 ];
+    vWorkerCopy := Copy( vSource );
+    // Mutating vWorkerCopy elements does not change vSource's array buffer.
+
+(* 10. Error Handling & Logging                                               *)
+(******************************************************************************)
+
+(* 10.1 Exception Hierarchy *)
+
+Derive application exceptions from `Exception` with semantic names.
+
+    type
+        EValidationError = class( Exception );
+        ERepositoryError = class( Exception );
+
+(* 10.2 Structured Exception Handling *)
+
+- Use `try/finally` for every acquired resource.
+- Use `try/except` only at module boundaries (UI events, thread entry) to log and
+  suppress; do not swallow exceptions silently.
+
+**Rethrow rules:**
+- `raise;` — Rethrows the current exception preserving the original call stack.
+- `raise vException;` (where `vException` is a variable) — Resets the stack context. Avoid unless you
+  intend to raise a new exception.
+
+**Exception wrapping:**
+Use Delphi's `Exception.RaiseOuterException` from inside an active exception handler to
+raise a new exception while preserving the active exception as its inner exception.
+The method takes one argument: the new outer exception.
+
+    try
+    begin
+        // Code that may fail.
+    end;
+    except
+        on vException: Exception do
+        begin
+            Exception.RaiseOuterException(
+                ERepositoryError.Create( 'Failed to save customer' )
+            );
+        end;
+    end;
+
+Do not use `raise NewException from vException`; that is not Delphi exception-chaining syntax.
+`raise;` remains the correct way to re-raise the current exception without replacing it.
+
+**Exception filtering:**
+Catch most specific exceptions first:
+
+    try
+        // Code that may raise multiple exceptions
+    except
+        on vException: EDatabaseError do
+        begin
+            // Handle database errors specifically
+        end;
+        on vException: EValidationError do
+        begin
+            // Handle validation errors
+        end;
+        on vException: Exception do
+        begin
+            // Catch-all for unexpected errors — log and rethrow or handle gracefully
+        end;
+    end;
+
+Rules:
+- Catch specific exceptions when you can handle them.
+- Use `on vException: Exception` only as a last resort or at module boundaries.
+- Never catch and swallow exceptions without logging.
+
+(* 10.3 Constructor Exception Safety *)
+
+See Section 8.1 for the complete pattern.
+
+(* 10.4 Logging Patterns *)
+
+- Log resource acquisition and release at `Debug` level.
+- Preserve original exception context when wrapping.
+
+
+(******************************************************************************)
+(* 11. Unit Initialisation & Finalisation                                     *)
+(******************************************************************************)
+
+(* 11.1 Prohibition on Reliance on Order *)
+
+The order of unit `initialization` sections across units follows the `uses` graph
+but is complex and can be surprising. Do not rely on implicit cross-unit state being
+available during `initialization`. Move complex startup dependencies to an explicit
+`Initialize` method called by the main application.
+
+(* 11.2 Initialisation Sections *)
+
+- Keep `initialization` code lightweight and predictable.
+- Avoid significant work (large allocations, complex logic).
+
+
+(******************************************************************************)
+(* 12. Hidden Side Effects                                                    *)
+(******************************************************************************)
+
+(* 12.1 Prohibition on Undocumented Global State Changes *)
+
+Functions and procedures must not produce hidden global state changes unless:
+- The side effect is explicitly stated in the function name (e.g., `SaveToRegistry`).
+- The side effect is clearly documented in the method header.
+
+Rationale: LLMs cannot infer implicit state mutation, leading to unsafe concurrency
+and unpredictable regression.
+
+
+(******************************************************************************)
+(* PART III — ENGINEERING CONVENTIONS                                         *)
+(******************************************************************************)
+
+(******************************************************************************)
+(* 13. Formatting & Layout                                                    *)
+(******************************************************************************)
+
+(* 13.1 Indentation *)
+
+- Use 4 spaces per indentation level as the default generated-code format.
+- Follow an existing repository's established indentation style when modifying it.
+- Do not mix tabs and spaces for indentation within the same file.
+- If a formatter or repository explicitly mandates tabs, follow that requirement
+  consistently for the affected project.
+
+(* 13.2 Unit Structure (Required Layout) *)
+
+Every Delphi unit must follow this structure:
+1. `unit` header
+2. `interface` section
+3. `uses` clause (interface-scope)
+4. Type declarations (classes, records, interfaces, enums)
+5. Constants
+6. `resourcestring` section (if present) — for localisable UI strings
+7. (Public/private) field and method declarations
+8. `implementation` section
+9. `uses` clause (implementation-scope), following project grouping and preserving any order that affects identifier resolution
+10. Method bodies (including constructors/destructors)
+11. `initialization` / `finalization` (if present)
+
+Visibility order within a class: `private`, `protected`, `public`, `published`.
+
+(* 13.3 Statement Blocks *)
+
+Every control structure that can contain multiple statements must use explicit
+`begin`/`end` blocks, even if the body contains only a single statement.
+
+**`if..then..else` rules:**
+- Both `then` and `else` branches must have their own `begin`/`end` block.
+- `end else` must be placed on a single line.
+
+    if condition then
+    begin
+        // code
+    end else
+    begin
+        // code
+    end;
+
+**`case` statement rules:**
+- Each `case` item (including `else`) must have its own `begin`/`end` block.
+
+    case vInteger of
+        1 :
+        begin
+            // code
+        end;
+        2 :
+        begin
+            // code
+        end;
+    else
+        begin
+            // code
+        end;
+    end;
+
+**Loop statements (`for`, `while`, `repeat`):**
+- Even single-iteration bodies must be wrapped in `begin`/`end`.
+
+    for vIndex := 0 to vLimit do
+    begin
+        Process( vIndex );
+    end;
+
+(* 13.4 Parameter Declaration Formatting *)
+
+- One space before and after the colon `:` separating parameter name from type.
+- One space before and after the colon for function return types.
+- One space after each semicolon `;` separating parameters.
+
+    procedure SaveCustomer( ParaCustomer : TCustomer; ParaForce : Boolean );
+    function Calculate( ParaValue : Integer ) : Double;
+
+(* 13.5 Call Site Parameter Passing *)
+
+- One space after the opening parenthesis `(`.
+- One space before the closing parenthesis `)`.
+- One space after each comma `,` separating arguments.
+
+    FunctionName( Variable1, Variable2, Variable3 );
+
+(* 13.6 `uses` Clause Formatting *)
+
+- The `uses` keyword on its own line.
+- Each unit name on a separate line.
+- Every unit name except the last followed by a comma `,`.
+- The entire list terminated with a semicolon `;` on its own line.
+- Use fully qualified unit names when they are valid for the target compiler and project.
+  Preserve established aliases and legacy names when required for compatibility.
+- Do not reorder units blindly: the order of units in a `uses` clause can affect
+  identifier resolution and initialization/finalization ordering. Prefer removing
+  unnecessary dependencies and grouping units consistently without changing semantics.
+
+    uses
+        System.Classes,
+        System.SysUtils,
+        Vcl.Forms,
+        Vcl.Controls;
+
+(* 13.7 Circular Dependency Rule *)
+
+Avoid circular dependencies among interface `uses` clauses. Delphi permits mutually
+dependent units only when each dependency cycle passes through at least one
+implementation `uses` clause; a cycle made entirely of interface `uses` references
+is invalid.
+
+When a circular dependency is detected:
+
+1. **Move implementation-only dependencies to implementation `uses`.** If a unit is
+   needed only by method bodies, implementation details, or local helper declarations,
+   place it in the implementation `uses` clause. Keep only true public type dependencies
+   in interface `uses`.
+
+2. **Use forward declarations for type references within the same unit.** Forward
+   declarations such as `TMyClass = class;` can resolve mutually referring types declared
+   in one unit. They do not, by themselves, make a circular pair of interface `uses`
+   clauses between separate units legal.
+
+3. **Reconsider the unit boundary when public types mutually depend on each other.**
+   Consolidate tightly coupled types into one unit, extract stable shared contracts or
+   data types into a deliberately designed common unit, or introduce an interface-based
+   abstraction that removes the reverse dependency.
+
+4. **Verify the resulting dependency graph.** Inspect both interface and implementation
+   `uses` clauses and compile the affected units/project. A new common unit must not
+   create another cycle or become an indiscriminate dumping ground for unrelated types.
+
+**Rationale:** An interface `uses` dependency exposes identifiers to the interface
+section. Implementation `uses` dependencies are private to the implementation. Forward
+declarations solve certain type-ordering problems within a unit; moving implementation-
+only dependencies and designing proper unit boundaries solve unit-level cycles.
+
+(* 14. Naming Conventions (Semantic Prefixes)                                 *)
+(******************************************************************************)
+
+(* 14.1 Purpose *)
+
+Prefixes encode the semantic role of an identifier, making source code
+understandable without IDE assistance.
+
+(* 14.2 Local Variables (`v`) *)
+
+All local variables must begin with `v` — no exceptions. Loop counters must be
+descriptive.
+
+    var
+        vIndex: Integer;    // descriptive, not vI
+        vCustomer: TCustomer;
+
+(* 14.3 Fields (`m`) *)
+
+All class and record fields must begin with `m`.
+
+    type
+        TCustomer = class
+        private
+            mId: Integer;
+            mName: string;
+        end;
+
+When reading legacy code that uses `F` (e.g., `FCount`), internally treat it as
+`mCount` for analysis, but do not rename unless explicitly asked.
+
+(* 14.4 Parameters (`Para`) *)
+
+All parameters must begin with `Para`.
+
+    procedure SaveCustomer( ParaCustomer: TCustomer; ParaForce: Boolean );
+    procedure LoadData( const ParaFileName: string; out ParaResult: Integer );
+
+(* 14.5 Constants (`Const`) *)
+
+All constants must begin with `Const`. For user-facing UI strings, prefer
+`resourcestring` over `const` to enable localisation.
+
+    const
+        ConstMaximumSize = 1000;
+        ConstDefaultTimeout = 30000;
+    resourcestring
+        resMsgSaveFailed = 'Save operation failed.';
+
+Naming style after the prefix:
+- For new constants in a file that does not already use underscores, use PascalCase
+  after the `Const` prefix (e.g., `ConstDefaultTimeout`).
+- If the existing file already uses underscores (e.g., `CONST_MAX_RETRIES`), preserve
+  that style for any new constants to maintain consistency.
+
+(* 14.6 Globals (`g`) *)
+
+True global variables are strongly discouraged. If unavoidable, they must begin
+with `g`.
+
+(* 14.7 Function Result *)
+
+Use the built-in `Result` variable for function returns. Do not declare a separate
+`vResult`. The shorthand `Exit( Value )` is permitted.
+
+(* 14.8 Structural Type Prefixes *)
+
+- `T` for Classes, Records, Enumerated Types.
+- `I` for Interfaces.
+- `P` for Pointer Types.
+- `E` for Exception classes.
+
+(* 14.9 Properties *)
+
+- Properties use PascalCase without prefixes.
+- Backing fields must use `m`.
+
+    property Id: Integer read mId write mId;
+
+**Special rule: Property Accessors as Method Calls**
+
+Inspect the property declaration before assuming its cost or side effects. A direct
+field-backed accessor is different from a getter/setter method. Getter and setter
+methods may validate, allocate, mutate state, perform I/O, or invalidate UI. In hot loops,
+inspect the actual accessor implementation and profile if its cost matters. Do not infer
+that every property access is expensive or that every property is a simple field access.
+
+(* 14.10 Event Handlers (Critical Interop Rule) *)
+
+- For VCL/FMX standard events (e.g., `TNotifyEvent`, `TMouseEvent`), preserve the
+  exact signature expected by the framework. Use the official parameter names
+  (`Sender`, `Button`, `Shift`, etc.) as defined in the RTL.
+- For custom events you define, use `ParaSender` and `ParaArgs` for consistency.
+
+    // VCL Standard — OnClick: TNotifyEvent
+    procedure FormClick( Sender: TObject );
+
+    // Custom delegate — use Para prefix
+    TCustomNotifyEvent = procedure( ParaSender: TObject; ParaData: TCustomData ) of object;
+
+(* 14.11 Generic Type Parameters *)
+
+Use descriptive names like `TItem`, `TValue`. Avoid single letters.
+
+(* 14.12 Consistency *)
+
+Do not mix naming conventions within the same code base. When modifying an existing
+codebase that uses a different convention (e.g., `F`/`A`/`L`), preserve that file's
+convention for existing identifiers, and apply semantic prefixes only to new
+identifiers.
+
+(* 14.13 Prohibition of Single-Letter Variable Names *)
+
+All variable names must be descriptive. Single-letter names (e.g., `I`, `J`, `K`)
+are forbidden even for loop counters. Use `vIndex`, `vSecondIndex`, `vRow`, `vCol`.
+
+    // Correct
+    var
+        vIndex: Integer;
+        vCustomerId: Integer;
+
+    // Incorrect — DO NOT USE:
+    var
+        I: Integer;
+        J: Integer;
+
+
+(******************************************************************************)
+(* 15. Testing                                                                *)
+(******************************************************************************)
+
+(* 15.1 DUnitX Conventions *)
+
+Write tests using DUnitX attributes. Do not inherit from `TTestCase` in new code
+(legacy DUnit). For new test fixtures, use attributes and a plain class.
+
+    type
+        [TestFixture]
+        TCustomerTest = class
+        private
+            mCustomer: TCustomer;
+        public
+            [Setup] procedure SetUp;
+            [TearDown] procedure TearDown;
+            [Test] procedure TestValidNameAssignment;
+        end;
+
+    procedure TCustomerTest.SetUp;
+    begin
+        mCustomer := TCustomer.Create( True );
+    end;
+
+    procedure TCustomerTest.TearDown;
+    begin
+        mCustomer.Free;
+    end;
+
+Do not call `inherited` in `SetUp`/`TearDown` unless extending a base fixture;
+DUnitX does not require `inherited`.
+
+(* 15.2 Test Patterns *)
+
+1. **Arrange-Act-Assert (AAA) Pattern**
+
+    [Test]
+    procedure TestDiscountCalculation;
+    var
+        vProduct: TProduct;
+        vPrice: Currency;
+    begin
+        // Arrange
+        vProduct := TProduct.Create( 'ABC123', 100.00 );
+        try
+            // Act
+            vProduct.ApplyDiscount( 10 );
+            vPrice := vProduct.GetPrice;
+
+            // Assert
+            Assert.AreEqual( 90.00, vPrice, 0.001, 'Price after 10% discount' );
+        finally
+            vProduct.Free;
+        end;
+    end;
+
+2. **Parameterized Tests**
+
+    [Test]
+    [TestCase( 'Tier1', '1,100,85' )]
+    [TestCase( 'Tier2', '2,100,90' )]
+    procedure TestTierDiscount( ParaTier: Integer; ParaAmount: Currency;
+        ParaExpected: Currency );
+
+3. **Mocking**
+
+    // Use Spring4D Mocks or Delphi Mocks
+    procedure TestCustomerRepository;
+    var
+        vMock: TMock<ICustomerDatabase>;
+        vRepo: TCustomerRepository;
+    begin
+        vMock := TMock<ICustomerDatabase>.Create;
+        vMock.Setup.WillReturn( ... ).When.GetCustomer( 123 );
+        vRepo := TCustomerRepository.Create( vMock );
+        // Test with mock
+    end;
+
+Rule: Every non-trivial business rule should have a unit test.
+
+
+(******************************************************************************)
+(* 16. Documentation & Comments                                               *)
+(******************************************************************************)
+
+(* 16.1 XML Documentation *)
+
+Use `///` for public API documentation. Include `@param`, `@returns`, `@raises`,
+`@remarks`, and `@example` where useful.
+
+    /// <summary>
+    ///   Calculates the discounted price based on customer tier.
+    /// </summary>
+    /// <param name="ParaTier">
+    ///   Customer loyalty tier (1-3). Tier 3 gets highest discount (15%).
+    /// </param>
+    /// <param name="ParaAmount">
+    ///   Subtotal before any discount is applied. Must be >= 0.
+    /// </param>
+    /// <returns>
+    ///   Final price after applying tier-specific discount, rounded to 2 decimals.
+    /// </returns>
+    /// <exception cref="EValidationError">
+    ///   Raised when ParaTier is outside valid range (1-3).
+    /// </exception>
+    function CalculateDiscount( ParaTier: Integer; ParaAmount: Currency ): Currency;
+
+Required Tags:
+- `summary` (always)
+- `param` (for each parameter)
+- `returns` (for functions)
+- `exception` (for raised exceptions)
+- `remarks` (for important notes)
+- `example` (when non-obvious)
+
+(* 16.2 Inline Comments *)
+
+Add inline comments (`//`) for complex business logic, but prefer self-documenting
+names.
+
+(* 16.3 Comment Preservation *)
+
+Preserve existing comments unless they are factually incorrect. Historical comments
+have value and must not be removed.
+
+
+(******************************************************************************)
+(* 17. Prohibited Constructs                                                  *)
+(******************************************************************************)
+
+(* 17.1 `with` Statement *)
+
+Strongly discouraged. In new code, `with` is forbidden because it destroys
+deterministic symbol resolution in partial AST reconstruction. When modifying
+legacy code that uses `with`, preserve it, but do not generate new `with`
+statements.
+
+(* 17.2 Mixing Spaces and Tabs *)
+
+Forbidden for indentation. Use the repository format consistently; the default for
+new code in this specification is 4 spaces per indentation level.
+
+(* 17.3 Implicit `Self` in Ambiguous Scopes *)
+
+Avoid relying on implicit `Self` in contexts where it might be ambiguous
+(e.g., inside nested types or generics).
+
+
+(******************************************************************************)
+(* 18. Performance                                                            *)
+(******************************************************************************)
+
+(* 18.1 String Construction *)
+
+Avoid repeated string concatenation in large loops. Prefer `TStringBuilder` with
+a capacity hint. The trigger is loop-based concatenation or unknown growth.
+
+    var
+        vBuilder: TStringBuilder;
+    begin
+        vBuilder := TStringBuilder.Create( ParaItems.Count * 20 ); // Hint
+        try
+            for vIndex := 0 to ParaItems.Count - 1 do
+                vBuilder.Append( ParaItems[ vIndex ] );
+            Result := vBuilder.ToString;
+        finally
+            vBuilder.Free;
+        end;
+    end;
+
+Note: `TStringBuilder` doubles its internal capacity when exceeded. The initial
+capacity is purely an optimization hint.
+
+(* 18.2 Parameter Passing *)
+
+Use `const` when a parameter is input-only. Use `out` for output-only parameters and
+`var` only when the routine must read and/or modify the caller's variable. Use
+`const [Ref]` only when forced reference passing is supported and justified by profiling.
+The documented Delphi spellings include `const [Ref]` and `[Ref] const`; use the
+form accepted by the configured compiler and follow repository formatting.
+
+(* 18.3 Avoid Unnecessary Allocations *)
+
+- Use `record` for small immutable data.
+- Pool objects where appropriate.
+- Avoid virtual method calls in tight loops unless necessary.
+
+
+(******************************************************************************)
+(* 19. Security                                                               *)
+(******************************************************************************)
+
+(* 19.1 Sensitive Data *)
+
+- Never log passwords, PII, tokens, or connection strings.
+- Delphi strings are reference-counted and use copy-on-write behavior for ordinary
+  modifications; they are not a guaranteed secure secret container. Copies, temporaries,
+  and encoded buffers may retain secret material.
+- Prefer a dedicated secret-buffer abstraction backed by uniquely owned bytes. Clear the
+  actual allocated buffer using an appropriate non-optimizable zeroization routine for
+  the target platform, and minimize copies. `FillChar` on one `TBytes` variable does not
+  erase other aliases, copies, or temporary buffers.
+
+    var
+        vSecret: TBytes;
+    begin
+        SetLength( vSecret, 32 );
+        // ... fill and use ...
+        if Length( vSecret ) > 0 then
+        begin
+            // Example of clearing this one buffer only; this is not a universal
+            // guarantee that every compiler/runtime copy of the secret is erased.
+            FillChar( vSecret[0], Length( vSecret ), 0 );
+        end;
+
+(* 19.2 Input Validation *)
+
+- Validate all external inputs at the application boundary (REST, UI, DB).
+- Never concatenate user input into SQL, shell commands, or file paths without
+  sanitization.
+
+(* 19.3 Locale Safety *)
+
+Use `TFormatSettings.Invariant` or an explicitly specified locale for parsing and
+storing machine-readable numeric/date data to avoid locale-dependent serialization.
+
+    Result := StrToFloat( ParaValue, TFormatSettings.Invariant );
+
+(* 19.4 Process Creation *)
+
+Do not build a process command line by concatenating untrusted input. Prefer APIs that
+separate executable selection from arguments where available. On Windows, `CreateProcess`
+receives a command-line string, so quote/escape arguments according to the target
+executable's parsing rules, use a trusted executable path, validate every argument, and
+apply allowlists where the operation is security-sensitive. `ShellExecute` invokes shell
+association/verb behavior and should not be given untrusted targets or parameters.
+
+
+(******************************************************************************)
+(* 20. Build Automation & Package Management                                  *)
+(******************************************************************************)
+
+1. **MSBuild Integration**
+   `msbuild MyProject.dproj /p:Config=Release /p:Platform=Win32`
+
+2. **Continuous Integration**
+   - Run DUnitX tests in CI pipeline.
+   - Generate code coverage reports.
+
+3. **Version Management**
+   - Use VERSIONINFO resource or custom version file.
+   - Increment version automatically in CI/CD.
+
+4. **Pre-commit Hooks**
+   - Run linter/static analysis.
+   - Enforce naming conventions.
+   - Check for unit tests.
+
+Rule: All code must pass CI checks before merging to main branch.
+
+
+(******************************************************************************)
+(* 21. Code Review Checklist                                                  *)
+(******************************************************************************)
+
+Before submitting code for review, verify:
+
+1. **Naming Conventions**
+   - [ ] All fields use `m` prefix.
+   - [ ] All locals use `v` prefix (descriptive, no single letters).
+   - [ ] All parameters use `Para` prefix.
+   - [ ] All constants use `Const` prefix (or follow existing file style).
+
+2. **Formatting Rules**
+   - [ ] Indentation follows the repository format (4 spaces by default); no mixed tabs/spaces.
+   - [ ] Every control structure uses explicit `begin`/`end` blocks.
+   - [ ] Parameter declarations have space before and after colons.
+   - [ ] Call sites have space after `(` and before `)` and after commas.
+   - [ ] `uses` clauses are multi-line with each unit on its own line.
+   - [ ] No circular dependencies in interface `uses` clauses.
+
+3. **Memory Safety**
+   - [ ] No known leaks; ownership and release responsibilities are documented.
+   - [ ] All owned fields/resources are released correctly; non-owned references are not freed.
+   - [ ] Constructor safety (exception-safe initialization).
+   - [ ] No `FreeAndNil` on interfaces.
+   - [ ] Assign `Default(T)` only to valid, initialized storage.
+   - [ ] Never assign `Default(T)` to uninitialised raw memory; call `Initialize` for raw managed storage.
+   - [ ] Understand the distinct object-ownership, interface-reference, weak-interface, and component-notification models (Section 8.4).
+   - [ ] `[weak]` / `[unsafe]` are used only for interface references and never as a substitute for ownership.
+   - [ ] No accidental exposure of `Self` as an interface inside constructors/destructors unless explicitly designed.
+
+4. **Thread Safety**
+   - [ ] No direct UI access from background threads.
+   - [ ] Shared data properly locked.
+   - [ ] Async callbacks handle lifetime correctly.
+   - [ ] PPL task exceptions are not swallowed.
+   - [ ] Closures capture the intended variable/value; per-iteration snapshots use independent closure environments.
+   - [ ] Record copies are intentional and thread-safe.
+   - [ ] Queued callbacks do not outlive captured objects or access unsynchronized shared state.
+
+5. **Error Handling**
+   - [ ] All resources in `try..finally`.
+   - [ ] Exceptions not swallowed without logging.
+   - [ ] Rethrow uses `raise;` or `Exception.RaiseOuterException` correctly.
+
+6. **Performance**
+   - [ ] `TStringBuilder` considered for repeated or large string construction where useful.
+   - [ ] `const` used for input-only parameters; `const [Ref]` used only when justified and supported.
+   - [ ] No unnecessary object allocations.
+
+7. **Testing**
+   - [ ] Unit tests written for non-trivial business rules.
+   - [ ] Edge cases tested.
+   - [ ] Negative test cases included.
+
+8. **Documentation**
+   - [ ] XML doc comments for all public APIs.
+   - [ ] Complex logic explained with inline comments.
+
+
+(******************************************************************************)
+(* 22. Package Management                                                     *)
+(******************************************************************************)
+
+Use Delphi's package management ecosystem:
+
+1. **GetIt Package Manager** — Integrated into RAD Studio.
+2. **Delphi Package Manager (DPM)** — Third-party, supports dependency resolution.
+3. **Manual Package Installation** — Document all dependencies with version numbers.
+
+Rule: Always document dependencies in the project README. Use specific version
+numbers, not "latest".
+
+
+(******************************************************************************)
+(* PART IV — RUNTIME BEHAVIOR REFERENCE                                       *)
+(******************************************************************************)
+
+(******************************************************************************)
+(* 23. JSON, Streams & Encoding                                               *)
+(******************************************************************************)
+
+(* 23.1 JSON Handling *)
+
+Use `System.JSON` with explicit ownership and encoding.
+
+    function TCustomerSerializer.ToJson( ParaCustomer: TCustomer ): string;
+    var
+        vJson: TJSONObject;
+    begin
+        vJson := TJSONObject.Create;
+        try
+            // Prefer explicit pair construction to avoid overload ambiguity.
+            vJson.AddPair( TJSONPair.Create( 'id', TJSONNumber.Create( ParaCustomer.mId ) ) );
+            vJson.AddPair( TJSONPair.Create( 'name', TJSONString.Create( ParaCustomer.mName ) ) );
+            Result := vJson.ToJSON;
+        finally
+            vJson.Free;
+        end;
+    end;
+
+Note: Using `AddPair( 'name', ParaCustomer.mName )` is valid because of the
+`TJSONString` overload, but can be ambiguous with the `TJSONValue` overload.
+Explicit construction with `TJSONPair.Create` is safer and clarifies ownership.
+
+(* 23.2 REST API Clients *)
+
+Always specify `TEncoding.UTF8` explicitly (or `TEncoding.UTF8WithoutBOM` in
+Delphi 12+).
+
+    vRequestBytes := TEncoding.UTF8.GetBytes( vJsonString );
+    // Assign the bytes or a stream using the API-specific request-content mechanism.
+
+(* 23.3 Stream Safety *)
+
+Use try/finally for all streams. Never assume stream position.
+
+
+(******************************************************************************)
+(* 24. Database Access                                                        *)
+(******************************************************************************)
+
+(* 24.1 Connection Ownership *)
+
+The creator owns the connection. Pass as parameter; do not create internally.
+
+    constructor TCustomerRepository.Create( ParaConnection: TFDConnection );
+    begin
+        inherited Create;
+        mConnection := ParaConnection;  // Reference, not owned
+    end;
+
+(* 24.2 Query Parameterisation *)
+
+Always use parameterised queries. Never concatenate user input into SQL.
+
+    vQuery.SQL.Text := 'SELECT * FROM Customers WHERE BranchId = :BranchId';
+    vQuery.ParamByName( 'BranchId' ).AsInteger := ParaBranchId;
+
+(* 24.3 FireDAC Best Practices *)
+
+- Use `TFDQuery` with `Params`.
+- Configure FireDAC connection pooling explicitly when the application benefits from it; pooling is not automatically enabled merely by using `TFDManager`.
+- Use `TFDTransaction` for transactional boundaries.
+- Always free datasets properly.
+- Consider fetch modes (`TFDQuery.FetchOptions`) to control memory usage.
+- Do not share connections across threads (see Section 9.5).
+
+Canonical FireDAC query pattern (try/finally):
+
+    var
+        vQuery: TFDQuery;
+    begin
+        vQuery := TFDQuery.Create( nil );
+        try
+            vQuery.Connection := mConnection;
+            vQuery.SQL.Text := 'SELECT * FROM Customers WHERE Id = :Id';
+            vQuery.ParamByName( 'Id' ).AsInteger := ParaId;
+            vQuery.Open;
+            // Process result...
+        finally
+            vQuery.Free;
+        end;
+    end;
+
+(* 24.4 ORM Frameworks *)
+
+| Framework | Best For | Notes |
+|-----------|----------|-------|
+| Plain FireDAC | High control, complex queries | Performance-critical apps |
+| mORMot | High performance, REST APIs | Full-stack, multi-tier |
+| Spring4D | Dependency injection, ORM | Enterprise apps |
+| REST Dataware | REST APIs, JSON | Modern, low-code |
+
+
+(******************************************************************************)
+(* 25. Cross-Platform Development                                             *)
+(******************************************************************************)
+
+(* 25.1 File System & OS Checks *)
+
+Use `TPath`, `TDirectory`, `TOSVersion`. `TPath.Combine` has overloads accepting
+multiple path segments (Delphi XE7+). You can either nest calls or use the
+array-based overload:
+
+    // Nested (works all versions)
+    Result := TPath.Combine( TPath.Combine( GetHomePath, 'AppData' ), 'Local\MyApp' );
+    // Or use the overload with array (modern Delphi)
+    Result := TPath.Combine( [GetHomePath, 'AppData', 'Local', 'MyApp'] );
+
+`System.SysUtils.ForceDirectories` is a supported cross-platform option that returns a
+Boolean indicating success. `TDirectory.CreateDirectory` is also supported and raises
+exceptions for invalid paths or creation failures. Choose based on the desired error
+handling style; do not use the deprecated Windows-only `Vcl.FileCtrl.ForceDirectories`.
+Use `TDirectory.CreateDirectory` when exception-based handling is preferred:
+
+    function GetAppDataFolder: string;
+    begin
+        {$IF DEFINED(MSWINDOWS)}
+        Result := TPath.Combine( [GetHomePath, 'AppData', 'Local', 'MyApp'] );
+        {$ELSEIF DEFINED(MACOS)}
+        Result := TPath.Combine( [GetHomePath, 'Library', 'Application Support', 'MyApp'] );
+        {$ELSE}
+        Result := TPath.Combine( [GetHomePath, '.myapp'] );
+        {$ENDIF}
+        if not TDirectory.Exists( Result ) then
+            TDirectory.CreateDirectory( Result );  // Raises EPathTooLongException, EIOException, etc.
+        // If you need to ignore errors (e.g., race conditions), use try/except.
+    end;
+
+Always handle or document the possibility that directory creation may fail.
+
+(* 25.2 Platform-Specific UI *)
+
+Respect platform idioms. Do not hard-code path separators; use `PathDelim`.
+
+(* 25.3 Conditional Compilation *)
+
+Use `{$IFDEF MSWINDOWS}`, `{$IFDEF MACOS}`, `{$IFDEF IOS}`, `{$IFDEF ANDROID}`
+for platform-specific code.
+
+
+(******************************************************************************)
+(* PART V — APPENDICES                                                        *)
+(******************************************************************************)
+
+(******************************************************************************)
+(* APPENDIX A — Complete Class Template                                       *)
+(******************************************************************************)
+
+unit App.CustomerManager;
+
+interface
+
+uses
+    System.Classes,
+    System.Generics.Collections,
+    App.Customer;
+
+type
+    TCustomerManager = class
+    private
+        mCustomers: TObjectList<TCustomer>;  // Owns objects
+        mConnectionString: string;
+    public
+        constructor Create( ParaConnectionString: string );
+        destructor Destroy; override;
+        function FindById( ParaId: Integer ): TCustomer;
+        procedure Add( ParaCustomer: TCustomer );
+    end;
+
+implementation
+
+{ TCustomerManager }
+
+constructor TCustomerManager.Create( ParaConnectionString: string );
+begin
+    inherited Create;
+    mConnectionString := ParaConnectionString;
+    mCustomers := TObjectList<TCustomer>.Create( True ); // Owns objects
+end;
+
+destructor TCustomerManager.Destroy;
+begin
+    mCustomers.Free; // Frees all contained customers
+    inherited;
+end;
+
+function TCustomerManager.FindById( ParaId: Integer ): TCustomer;
+begin
+    Result := nil;
+    for var vCustomer in mCustomers do
+    begin
+        if vCustomer.Id = ParaId then
+        begin
+            Result := vCustomer;
+            Exit;
+        end;
+    end;
+end;
+
+procedure TCustomerManager.Add( ParaCustomer: TCustomer );
+begin
+    if ParaCustomer = nil then
+    begin
+        raise EArgumentException.Create( 'ParaCustomer cannot be nil' );
+    end;
+    mCustomers.Add( ParaCustomer );
+end;
+
+end.
+
+
+(******************************************************************************)
+(* APPENDIX B — Delphi Version Compatibility Matrix                           *)
+(******************************************************************************)
+
+| Feature | Minimum Version | Notes |
+|---|---|---|
+| Unicode `string` | Delphi 2009 | `string` is `UnicodeString` in modern Delphi. |
+| Inline local variables | Delphi 10.3 Rio | Use documented inline declaration scope. |
+| Managed-record custom operators | Delphi 10.4 Sydney | `Initialize` / `Finalize`; check exact target syntax. |
+| Dynamic-array literals | Delphi 10.4 Sydney | Assignment shares dynamic-array storage unless copied. |
+| `[weak]` / `[unsafe]` | Post-ARC Delphi | Applies to interface references, not ordinary object references. |
+| `TArray<T>.Create` | Verify target RTL | Do not confuse with array literal syntax. |
+| `[Ref] const` parameter | Verify target compiler | Forces reference passing for a constant parameter. |
+| `TEncoding.UTF8WithoutBOM` | Delphi 12 Athens | Use only when present in target RTL. |
+| `System.Nullable<T: nonnull>` | Delphi 13 Florence | Built-in nullable record; honor its generic constraint. |
+| `raise ... from vException` | Not Delphi syntax | Use `Exception.RaiseOuterException` for exception chaining. |
+| `TPath.Combine` array overload | Verify target RTL | Check overload availability in target compiler. |
+| Conditional expression `if C then A else B` | Delphi 13 Florence | Delphi expression operator, not a statement substitution in every context. |
+| `is not` / `not in` | Delphi 13 Florence | New language operators. |
+| `NameOf` | Delphi 13 Florence | Intrinsic returning identifier text. |
+| `noreturn`, `{$PUSHOPT}`, `{$POPOPT}` | Delphi 13 Florence | Follow compiler documentation and balancing rules. |
+| Generic `interface` / `unmanaged` constraints | Delphi 13 Florence | New generic constraint forms. |
+
+Compiler version mapping relevant to conditional compilation:
+- Delphi 10.2 Tokyo: `CompilerVersion = 32.0`.
+- Delphi 10.3 Rio: `CompilerVersion = 33.0`.
+- Delphi 10.4 Sydney: `CompilerVersion = 34.0`.
+- Delphi 11 Alexandria: `CompilerVersion = 35.0`.
+- Delphi 12 Athens: `CompilerVersion = 36.0`.
+- Delphi 13 Florence: `CompilerVersion = 37.0`.
+
+For Delphi 13-only syntax, a guard may use `{$IF CompilerVersion >= 37.0}`. Confirm the
+actual compiler version constant for the installed update before relying on it.
+
+
+(* APPENDIX C — AI Repair Mode Guidelines                                     *)
+(******************************************************************************)
+
+When encountering partially broken code:
+
+1. **Inspect before repairing.** Read the DPR/DPROJ, relevant units, package files,
+   conditional defines, search paths, and neighboring implementations before inventing
+   missing declarations.
+2. **Classify defects.** Separate syntax/compiler errors from unresolved dependencies,
+   runtime defects, behavioral regressions, resource problems, and concurrency problems.
+3. **Repair minimally.** Preserve public APIs and behavior unless the requested change or
+   a demonstrated defect requires alteration. Prefer a minimal, complete repair over a
+   broad speculative rewrite.
+4. **Do not fabricate dependencies.** Search project sources and configured libraries
+   before declaring a symbol missing. If a dependency is truly unavailable, identify
+   its unit/package and report the limitation.
+5. **Use stubs only by explicit agreement.** A stub is a compile-only scaffold, not a
+   production implementation. Label it clearly and enumerate the behavior it omits.
+6. **Verify honestly.** Run the configured compiler/build and tests when tools and project
+   files are available. If not run, say the code is reasoned about but uncompiled.
+7. **Preserve evidence.** Report files changed, relevant assumptions, build/test results,
+   and any remaining known risks.
+
+Never claim that code compiles, tests pass, or behavior is verified unless the relevant
+command was actually executed successfully against the target configuration.
+
+
+(* APPENDIX D — Error Classification                                          *)
+(******************************************************************************)
+
+| Category          | Description                                      |
+|-------------------|--------------------------------------------------|
+| Syntax            | Does not compile                                |
+| Semantic          | Compiles but logic is wrong                    |
+| Memory            | Leaks, double-free, use-after-free              |
+| Concurrency       | Race conditions, deadlocks, UI threading violations |
+| Performance       | Inefficient algorithms, excessive allocations   |
+| Security          | Injection, exposure of secrets                  |
+
+
+(******************************************************************************)
+(* APPENDIX E — Delphi Syntax Ground Truth                                    *)
+(******************************************************************************)
+
+This appendix summarizes selected compiler syntax and language facts that are
+frequently miswritten. Always verify constructs against the project's target compiler.
+
+**1. Inline `for var` loop (Delphi 10.3+):**
+
+    for var vIndex := 0 to vLimit do
+    begin
+        Process( vIndex );
+    end;
+
+**2. Exception chaining:**
+
+    try
+    begin
+        // Code that may fail.
+    end;
+    except
+        on vException: Exception do
+        begin
+            Exception.RaiseOuterException(
+                EMyException.Create( 'Operation failed' )
+            );
+        end;
+    end;
+
+`raise;` re-raises the active exception. `raise vException;` raises the specified exception
+object and should not be substituted for `raise;` when preserving the current exception
+context is intended. `raise NewException from vException` is not Delphi syntax.
+
+**3. Force reference passing for a constant parameter:**
+
+    procedure DoSomething( const [Ref] ParaRec: TLargeRecord );
+
+The parameter remains constant/read-only. `[Ref]` requests reference passing; profile
+before using it for performance.
+
+**4. Interface declarations:**
+
+    type
+        IMyInterface = interface
+            procedure Execute;
+        end;
+
+Place the implementation in a class or another documented implementation mechanism.
+Do not put a method body inside an ordinary Delphi interface declaration.
+
+**5. Dynamic-array literal syntax (Delphi 10.4+):**
+
+    var
+        vArr: TArray<Integer>;
+    begin
+        vArr := [ 1, 2, 3 ];
+    end;
+
+**6. `TArray<T>.Create`:**
+
+The generic array helper is available in supported RTL versions. Array literals are often
+more concise, but neither form should be called universally superior.
+
+**7. Output parameters:**
+
+    var
+        vCustomer: TCustomer;
+    begin
+        if TryGetCustomer( ParaId, vCustomer ) then
+        begin
+            Process( vCustomer );
+        end;
+    end;
+
+Do not write C#-style `out var vCustomer` at a Delphi call site.
+
+**8. JSON overload resolution:**
+
+Inspect the actual `System.JSON` overloads in the target RTL. When overload selection or
+ownership is unclear, construct a `TJSONValue`/`TJSONPair` explicitly and document which
+object takes ownership.
+
+**9. Managed and unmanaged behavior:**
+
+- Strings are managed, reference-counted, and use copy-on-write for normal modifications.
+- Dynamic arrays are managed and reference-counted; assignment shares storage. Use
+  `Copy` for an independent array buffer.
+- Interface references are managed, but object lifetime depends on `_AddRef`/`_Release`.
+- Anonymous-method references are managed; captured variables live in a closure frame.
+- Class instances are not automatically reference-counted in post-ARC Delphi.
+- A record assignment copies the record, but contained references may still be shared.
+
+**10. `Default(T)` and raw memory:**
+
+Use compiler-managed variables normally. For raw storage allocated with `GetMem`, call
+`Initialize` before using a managed type and `Finalize` before `FreeMem`. A zero/default
+value may still violate a custom record's logical invariants.
+
+**11. Managed record operator signatures:**
+
+The explicit documented form uses `class operator Initialize(out Dest: TRecord)` and
+`class operator Finalize(var Dest: TRecord)`. Delphi 13 supports a concise implicit-`Self`
+form. Use only the declaration form verified for the project's minimum compiler.
+
+**12. Dynamic-array copying:**
+
+    vWorkerArray := Copy( vSourceArray );
+
+This creates an independent dynamic-array buffer. It does not deep-clone objects or
+other references stored in the array elements.
+
+
+(* APPENDIX F — Parameter and Representation Notes                            *)
+(******************************************************************************)
+
+Do not hard-code ABI assumptions without identifying the target platform, compiler,
+calling convention, and parameter declaration.
+
+- Value parameters follow Delphi value-parameter semantics; structured values may be
+  copied according to the compiler's chosen calling convention.
+- `var` and `out` parameters refer to the caller's variable.
+- `const` parameters are read-only to the callee; the compiler may pass them by value
+  or reference depending on type and compiler rules.
+- `const [Ref]` requests reference passing for a constant parameter.
+- Class variables and object fields contain object references; assigning the reference
+  does not clone the class instance.
+- Interface variables contain interface references and invoke interface lifetime
+  operations according to the implementing object's policy.
+- Strings and dynamic arrays are managed types, but their assignment/copy behavior is
+  not identical: strings use copy-on-write; dynamic-array assignment shares storage.
+- Managed-record `Initialize`, `Assign`, and `Finalize` operators, when declared, are
+  invoked by the compiler according to the record's lifetime operations.
+
+Exact register, stack, hidden-parameter, and structure-layout details are compiler- and
+platform-specific. Do not infer a stable ABI from a source-level type alone. For binary
+interoperability, use the documented calling convention and validate with the actual
+compiler and target ABI.
+
+
+(* APPENDIX G — Changelog v0.16 → v0.24                                      *)
+(******************************************************************************)
+
+- **v0.16 → v0.17**: Corrected `Default(T)` explanation; removed incorrect `TNullable` location; updated `TPath.Combine` and `ForceDirectories`; added loop variable & record copy threading rules.
+- **v0.17 → v0.18**: The then-current text described `[weak]` as ordinary-object tracking. That claim is superseded and corrected in v0.24.
+- **v0.18 → v0.19**: Preliminary rewrite of weak reference section.
+- **v0.19 → v0.20**: Introduced the earlier "Delphi Lifetime Correctness Model" (v1.0). Its attempt to describe the weak-reference mechanism generalized interface weak references to ordinary object fields; v0.24 replaces that model with the supported interface-reference distinction.
+- **v0.20 → v0.21**: Final hardening pass:
+  - Added constructor/destructor rule for `Self` → interface casts (Section 8.4.4).
+  - Strengthened `TThread.Queue` capture rule with explicit lifetime requirements (Section 9.2).
+  - Introduced property accessors as side-effectful method calls (Section 14.9).
+- **v0.21 → v0.22**: Added initial circular dependency rule.
+- **v0.22 → v0.23**: Expanded circular dependency guidance. The v0.23 priority incorrectly elevated forward declarations above implementation `uses` and unit-boundary design.
+- **v0.23 → v0.24**: Replaced the non-Delphi `constref` and `raise ... from vException` claims with correct Delphi mechanisms; added the Delphi 13 `System.Nullable<T: nonnull>` RTL type; replaced the incorrect ordinary-object `[weak]` model with the supported weak-interface model; corrected closure capture, dynamic-array assignment, and `IFuture.Value` semantics; removed the unsupported default-interface-method claim and C#-style `out var` call syntax; corrected circular-unit dependency strategy; refined constructor, security, `ForceDirectories`, and repair-mode guidance; aligned the document to Delphi 13 Florence and added verified Delphi 13 language features.
+
+(******************************************************************************)
+
+(******************************************************************************)
+(* APPENDIX H — Technical Verification Sources                                *)
+(******************************************************************************)
+
+The following Embarcadero documentation pages were consulted for the technical rules
+corrected in v0.24. This is documentation review, not a claim that every illustrative
+snippet in this file was compiled. Documentation is versioned and may change; re-check
+the target compiler's documentation and compile representative examples when updating
+this skill.
+
+1. Delphi 13 Florence — What's New (compiler language additions):
+   https://docwiki.embarcadero.com/RADStudio/Florence/en/What's_New
+2. Delphi 13.2 Florence release announcement:
+   https://blogs.embarcadero.com/rad-studio-13-2-florence-is-here/
+3. Delphi compiler versions:
+   https://docwiki.embarcadero.com/RADStudio/Florence/en/Compiler_Versions
+4. Delphi parameters and `[Ref]` constant parameters:
+   https://docwiki.embarcadero.com/RADStudio/Florence/en/Parameters_(Delphi)
+5. Delphi anonymous methods and variable binding:
+   https://docwiki.embarcadero.com/RADStudio/Florence/en/Anonymous_Methods_in_Delphi
+6. Compiler attributes, including `[weak]` and `[unsafe]`:
+   https://docwiki.embarcadero.com/RADStudio/Athens/en/Compiler_Attributes
+7. Delphi dynamic arrays:
+   https://docwiki.embarcadero.com/Libraries/Florence/en/System.DynamicArray
+8. Custom managed records:
+   https://docwiki.embarcadero.com/RADStudio/en/Custom_Managed_Records
+9. Delphi programs, units, and circular unit references:
+   https://docwiki.embarcadero.com/RADStudio/Florence/en/Programs_and_Units_(Delphi)
+10. `TThread.Queue` and its main-thread synchronous special case:
+   https://docwiki.embarcadero.com/Libraries/Florence/en/System.Classes.TThread.Queue
+   `TThread.ForceQueue` is the deferred-queue alternative:
+   https://docwiki.embarcadero.com/Libraries/Florence/en/API%3ASystem.Classes.TThread.ForceQueue
+11. `IFuture<T>.Value` and task scheduling:
+    https://docwiki.embarcadero.com/Libraries/Florence/en/System.Threading.IFuture
+    https://docwiki.embarcadero.com/RADStudio/Florence/en/Using_TTask.IFuture_from_the_Parallel_Programming_Library
+    Note: the API description and usage tutorial differ in how they describe explicit `Start`;
+    verify the installed RTL's factory behavior rather than blindly starting a future twice.
+12. `Exception.RaiseOuterException`:
+    https://docwiki.embarcadero.com/Libraries/Florence/en/System.SysUtils.Exception.RaiseOuterException
+13. `TComponent.Notification` and component removal notification:
+    https://docwiki.embarcadero.com/Libraries/Florence/en/System.Classes.TComponent.Notification
+14. `TComponent.FreeNotification`:
+    https://docwiki.embarcadero.com/Libraries/Florence/en/System.Classes.TComponent.FreeNotification
+15. `TDirectory.CreateDirectory`:
+    https://docwiki.embarcadero.com/Libraries/Florence/en/System.IOUtils.TDirectory.CreateDirectory
+16. `System.SysUtils.ForceDirectories`:
+    https://docwiki.embarcadero.com/Libraries/Florence/en/System.SysUtils.ForceDirectories
+17. Delphi 13 RTL nullable record:
+    https://docwiki.embarcadero.com/Libraries/Florence/en/System.Nullable
+
+(******************************************************************************)
