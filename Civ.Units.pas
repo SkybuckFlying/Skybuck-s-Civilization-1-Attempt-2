@@ -13,14 +13,6 @@ uses
     Civ.GameState;
 
 type
-    { Unit creation, stacking, movement, and the exploration/contact sweep.
-      Mirrors UNITS.C. Does not own the world or the state; both are passed
-      in and remain the caller's responsibility.
-
-      The one piece of mutable module state is the `mCityCreate` hook, which
-      is registered once via RegisterCityCreate and used by EnterHut's
-      "advanced tribe" branch. This is a callback, not an ownership
-      relationship — the caller owns the TCivCities instance. }
     TCivUnitManager = class
     private
         mWorld : TCivWorld;
@@ -36,13 +28,9 @@ type
         constructor Create(ParaWorld: TCivWorld; ParaRng: TCivRandom);
         destructor Destroy; override;
 
-        { --- Creation / removal ----------------------------------------- }
         function  CreateUnit(ParaOwner, ParaType, ParaX, ParaY: Integer): Integer;
         procedure DropUnit(ParaGroup, ParaIndex: Integer);
 
-        { --- Map occupancy ---------------------------------------------- }
-        { Delegations to TCivWorld. MapStack stays here because it needs
-          the unit array. }
         function  MapOwner(ParaX, ParaY: Integer): Integer;
         function  MapStack(ParaX, ParaY: Integer; out ParaCiv: Integer): Integer;
         procedure PutUnit(ParaGroup, ParaIndex, ParaX, ParaY: Integer);
@@ -51,7 +39,6 @@ type
         procedure ClearOccupied(ParaX, ParaY: Integer);
         function  FindUnitAt(ParaGroup, ParaX, ParaY: Integer): Integer;
 
-        { --- Stack ring -------------------------------------------------- }
         procedure StackAdd(ParaGroup, ParaIndex, ParaHead: Integer);
         procedure StackRemove(ParaGroup, ParaIndex: Integer);
         function  StackOther(ParaGroup, ParaIndex: Integer): Integer;
@@ -60,18 +47,14 @@ type
         function  CountU(ParaGroup, ParaIndex, ParaType: Integer): Integer;
         function  StackStrength(ParaGroup, ParaIndex, ParaRole: Integer): Integer;
 
-        { --- Visibility, contact, movement ------------------------------- }
         procedure UnitSight(ParaX, ParaY, ParaOwner, ParaIndex: Integer);
         function  UnitBlocked(ParaGroup, ParaX, ParaY: Integer): Boolean;
         function  IfOpen(ParaGroup, ParaX, ParaY: Integer): Boolean;
         function  AdjGrp(ParaGroup, ParaX, ParaY: Integer): Boolean;
 
-        { --- Huts -------------------------------------------------------- }
         procedure EnterHut(ParaOwner, ParaIndex: Integer);
     end;
 
-{ Registers the city-creation callback that EnterHut uses for the
-  "advanced tribe" reward. Call once at startup. }
 procedure RegisterCityCreate(ParaFunc: TCityCreateMethod);
 
 implementation
@@ -82,15 +65,6 @@ uses
 const
     ConstBarbarianCiv = 0;
 
-    { GAME.C `improvements[46]` — indices 0..45. Kept local because only
-      the hut's terrain-cost comparison and Civ.WorldGen use it, and the
-      former reaches it via the caller-provided mCityCreate. }
-    ConstCityBuildCost: array[0..45] of Integer = (
-        8, 20, 4, 6, 4, 8, 8, 8, 12, 12, 12, 16, 16, 16, 10, 20,
-        32, 20, 20, 16, 24, 16, 8, 16, 32, 30, 30, 20, 20, 30,
-        30, 30, 40, 30, 30, 40, 40, 40, 30, 60, 60, 60, 60, 60, 60, 60
-    );
-
 var
     mCityCreate : TCityCreateMethod = nil;
 
@@ -99,9 +73,6 @@ begin
     mCityCreate := ParaFunc;
 end;
 
-{ -------------------------------------------------------------------------
-  Construction / teardown.
-  ------------------------------------------------------------------------- }
 constructor TCivUnitManager.Create(ParaWorld: TCivWorld; ParaRng: TCivRandom);
 begin
     inherited Create;
@@ -115,9 +86,6 @@ begin
     inherited;
 end;
 
-{ -------------------------------------------------------------------------
-  Helper: adv check, duplicate-free.
-  ------------------------------------------------------------------------- }
 function TCivUnitManager.HasAdvance(ParaCiv, ParaAdvance: Integer): Boolean;
 var
     vWord : Integer;
@@ -130,9 +98,6 @@ begin
     Result := (mState.mData.AdvancesKnown[ParaCiv, vWord] and vBit) <> 0;
 end;
 
-{ -------------------------------------------------------------------------
-  Stack ring.
-  ------------------------------------------------------------------------- }
 procedure TCivUnitManager.StackAdd(ParaGroup, ParaIndex, ParaHead: Integer);
 begin
     if mState.mData.ArmyData[ParaGroup, ParaHead].Next = -1 then
@@ -172,18 +137,16 @@ begin
     mState.mData.ArmyData[ParaGroup, ParaIndex].Next := -1;
 end;
 
-{ Walks up to 10 members of a stack ring. The C's each_stack caps at 10;
-  we preserve that. }
 procedure TCivUnitManager.EachStack(ParaGroup, ParaIndex: Integer;
     ParaCallback: TProc<Integer, Integer>);
 var
-    vStart, vCur, vCount : Integer;
+    vStart, vCur, vCount, vNext : Integer;
 begin
     vStart := ParaIndex;
     vCur   := ParaIndex;
     vCount := 0;
     repeat
-        var vNext := mState.mData.ArmyData[ParaGroup, vCur].Next;
+        vNext := mState.mData.ArmyData[ParaGroup, vCur].Next;
         ParaCallback(ParaGroup, vCur);
         vCur := vNext;
         Inc(vCount);
@@ -192,12 +155,12 @@ end;
 
 function TCivUnitManager.StackLen(ParaGroup, ParaIndex, ParaMode: Integer): Integer;
 var
-    vStart, vCur, vCount, vTotal, vLimitUnit : Integer;
+    vStart, vCur, vCount, vTotal, vLimitUnit, vType, vNext : Integer;
 begin
     vStart := ParaIndex; vCur := ParaIndex; vCount := 0;
     vTotal := 0; vLimitUnit := ParaIndex;
     repeat
-        var vType := mState.mData.ArmyData[ParaGroup, vCur].UnitType;
+        vType := mState.mData.ArmyData[ParaGroup, vCur].UnitType;
         case ParaMode of
             0 : vTotal := vTotal + mState.mData.UtTypes[vType].Cost;
             1 : vTotal := vTotal + mState.mData.UtTypes[vType].Defense;
@@ -207,7 +170,7 @@ begin
                    (mState.mData.UtTypes[vType].Role = 2) then
                     Inc(vTotal);
         end;
-        var vNext := mState.mData.ArmyData[ParaGroup, vCur].Next;
+        vNext := mState.mData.ArmyData[ParaGroup, vCur].Next;
         vCur := vNext;
         Inc(vCount);
     until (vCur = -1) or (vCur = vStart) or (vCount >= 10);
@@ -216,15 +179,15 @@ end;
 
 function TCivUnitManager.StackCap(ParaGroup, ParaIndex: Integer): Integer;
 var
-    vStart, vCur, vCount, vTotal : Integer;
+    vStart, vCur, vCount, vTotal, vType, vNext : Integer;
 begin
     vStart := ParaIndex; vCur := ParaIndex; vCount := 0; vTotal := 0;
     repeat
-        var vType := mState.mData.ArmyData[ParaGroup, vCur].UnitType;
+        vType := mState.mData.ArmyData[ParaGroup, vCur].UnitType;
         if mState.mData.UtTypes[vType].Domain = 0 then Dec(vTotal);
         if mState.mData.UtTypes[vType].Role = 5 then
             vTotal := vTotal + mState.mData.UtTypes[vType].Capacity;
-        var vNext := mState.mData.ArmyData[ParaGroup, vCur].Next;
+        vNext := mState.mData.ArmyData[ParaGroup, vCur].Next;
         vCur := vNext; Inc(vCount);
     until (vCur = -1) or (vCur = vStart) or (vCount >= 10);
     Result := vTotal;
@@ -232,13 +195,13 @@ end;
 
 function TCivUnitManager.CountU(ParaGroup, ParaIndex, ParaType: Integer): Integer;
 var
-    vStart, vCur, vCount, vTotal : Integer;
+    vStart, vCur, vCount, vTotal, vNext : Integer;
 begin
     vStart := ParaIndex; vCur := ParaIndex; vCount := 0; vTotal := 0;
     repeat
         if mState.mData.ArmyData[ParaGroup, vCur].UnitType = ParaType then
             Inc(vTotal);
-        var vNext := mState.mData.ArmyData[ParaGroup, vCur].Next;
+        vNext := mState.mData.ArmyData[ParaGroup, vCur].Next;
         vCur := vNext; Inc(vCount);
     until (vCur = -1) or (vCur = vStart) or (vCount >= 10);
     Result := vTotal;
@@ -246,23 +209,21 @@ end;
 
 function TCivUnitManager.StackStrength(ParaGroup, ParaIndex, ParaRole: Integer): Integer;
 var
-    vStart, vCur, vCount, vTotal : Integer;
+    vStart, vCur, vCount, vTotal, vNext : Integer;
 begin
     vStart := ParaIndex; vCur := ParaIndex; vCount := 0; vTotal := 0;
     repeat
         if mState.mData.UtTypes[mState.mData.ArmyData[ParaGroup, vCur].UnitType].Role = ParaRole then
             Inc(vTotal);
-        var vNext := mState.mData.ArmyData[ParaGroup, vCur].Next;
+        vNext := mState.mData.ArmyData[ParaGroup, vCur].Next;
         vCur := vNext; Inc(vCount);
     until (vCur = -1) or (vCur = vStart) or (vCount >= 10);
     Result := vTotal;
 end;
 
-{ Best defender in the stack. Delegates scoring to TCivWorld so the
-  combat-resolver and unit-manager share one definition. }
 function TCivUnitManager.StackOther(ParaGroup, ParaIndex: Integer): Integer;
 var
-    vStart, vCur, vCount, vBest, vBestScore, vScore : Integer;
+    vStart, vCur, vCount, vBest, vBestScore, vScore, vNext : Integer;
 begin
     if mState.mData.ArmyData[ParaGroup, ParaIndex].Next = -1 then
         Exit(ParaIndex);
@@ -275,22 +236,18 @@ begin
             vBestScore := vScore;
             vBest := vCur;
         end;
-        var vNext := mState.mData.ArmyData[ParaGroup, vCur].Next;
+        vNext := mState.mData.ArmyData[ParaGroup, vCur].Next;
         vCur := vNext; Inc(vCount);
     until (vCur = -1) or (vCur = vStart) or (vCount >= 10);
     Result := vBest;
 end;
 
-{ -------------------------------------------------------------------------
-  Creation / removal.
-  ------------------------------------------------------------------------- }
 function TCivUnitManager.CreateUnit(
     ParaOwner, ParaType, ParaX, ParaY: Integer): Integer;
 var
     vIndex, vCityIdx : Integer;
     vBit : Byte;
 begin
-    { Slot 127 is reserved by the pathfinder as a probe. }
     for vIndex := 0 to 126 do
     begin
         if mState.mData.ArmyData[ParaOwner, vIndex].UnitType <> -1 then
@@ -317,7 +274,7 @@ begin
             mState.mData.ArmyData[ParaOwner, vIndex].HomeCity := -1;
 
         vBit := Byte(1 shl ParaOwner);
-        mState.mData.ArmyData[ParaOwner, vIndex].Visibility := ShortInt(vBit);
+        mState.mData.ArmyData[ParaOwner, vIndex].Visibility := vBit;
 
         Inc(mState.mData.ForcesPresent[ParaOwner, ParaType]);
 
@@ -345,9 +302,6 @@ begin
     vSea := mWorld.IsOcean(mState.mData.ArmyData[ParaGroup, ParaIndex].X,
                            mState.mData.ArmyData[ParaGroup, ParaIndex].Y);
 
-    { Sea cargo: a ship at sea takes its land cargo with it, and a Carrier
-      at sea takes its aircraft. Only one EachStack fires in practice,
-      because carriers have Capacity = 0. }
     if vSea and (mState.mData.ArmyData[ParaGroup, ParaIndex].Next <> -1) then
     begin
         if mState.mData.UtTypes[vType].Capacity > 0 then
@@ -377,12 +331,9 @@ begin
        (mState.mData.UtTypes[mState.mData.ArmyData[ParaGroup, ParaIndex].UnitType].Domain = 0) then
         Exit;
     mState.mData.ArmyData[ParaGroup, ParaIndex].Status :=
-        mState.mData.ArmyData[ParaGroup, ParaIndex].Status and not ConstUnitSentry;
+        mState.mData.ArmyData[ParaGroup, ParaIndex].Status and not Byte(ConstUnitSentry);
 end;
 
-{ -------------------------------------------------------------------------
-  Map occupancy — delegations plus the unit-scan variant.
-  ------------------------------------------------------------------------- }
 function TCivUnitManager.MapOwner(ParaX, ParaY: Integer): Integer;
 begin
     Result := mWorld.MapOwner(ParaX, ParaY);
@@ -411,7 +362,6 @@ begin
            (mState.mData.ArmyData[vCiv, vIdx].X = ParaX) and
            (mState.mData.ArmyData[vCiv, vIdx].Y = ParaY) then
             Exit(vIdx);
-    { Stale occupancy byte: clear the flag. }
     mWorld.ClearOccupied(ParaX, ParaY);
     Result := -1;
 end;
@@ -451,9 +401,6 @@ begin
         mWorld.ClearOccupied(ParaOldX, ParaOldY);
 end;
 
-{ -------------------------------------------------------------------------
-  Predicates.
-  ------------------------------------------------------------------------- }
 function TCivUnitManager.UnitBlocked(
     ParaGroup, ParaX, ParaY: Integer): Boolean;
 var
@@ -476,10 +423,10 @@ begin
             if vRecordIndex = -1 then Continue;
 
             vVisBit := Byte(1 shl mState.mData.CivNow);
-            if (Byte(mState.mData.ArmyData[vTileOwner, vRecordIndex].Visibility) and vVisBit) = 0 then
+            if (mState.mData.ArmyData[vTileOwner, vRecordIndex].Visibility and vVisBit) = 0 then
             begin
                 mState.mData.ArmyData[vTileOwner, vRecordIndex].Visibility :=
-                    ShortInt(Byte(mState.mData.ArmyData[vTileOwner, vRecordIndex].Visibility) or vVisBit);
+                    mState.mData.ArmyData[vTileOwner, vRecordIndex].Visibility or vVisBit;
                 mWorld.SetExplored(mState.mData.CivNow, vNX, vNY, True);
             end;
 
@@ -511,28 +458,31 @@ begin
 end;
 
 { -------------------------------------------------------------------------
-  UnitSight — reveal, contact detection, contact resolution.
+  UnitSight: reveal, contact detection, contact resolution.
 
-  Preserves the C's structure exactly:
-    1. Primary 5×5 reveal (rows 0..24 of the spiral).
+  Preserves the C's structure:
+    1. Primary 5x5 reveal (rows 0..24 of the spiral).
     2. Contact sweep for the eight immediate neighbours.
-    3. Secondary 5×5 sweep for wider-sight units.
-    4. Redraw pass for the human.
-  The diplomacy_event() call is deferred: it needs the TCivDiplomacy
-  instance, which lives one layer up. The C source has this call at a
-  specific position (after the two goto-clear branches); we preserve
-  that position with a `{ TODO: wire }` comment.
+    3. Secondary 5x5 sweep for wider-sight units.
+    4. Redraw pass for the human (a no-op here).
+
+  The diplomacy_event call is deferred: it needs the TCivDiplomacy instance,
+  which lives one layer up. The C source has this call at a specific
+  position (after the two goto-clear branches); the TODO marker below
+  preserves that position.
   ------------------------------------------------------------------------- }
 procedure TCivUnitManager.UnitSight(
     ParaX, ParaY, ParaOwner, ParaIndex: Integer);
 var
-    vDir, vNX, vNY, vTileFlags, vUnitType, vExistingOwner, vExisting : Integer;
-    vVisBit, vMapFlags, vTerrainAt, vCityIdx : Integer;
+    vDir, vNX, vNY, vTileFlags, vUnitType, vExistingOwner, vExisting,
+    vCityIdx : Integer;
+    vVisBit  : Byte;
+    vMapFlags, vTerrainAt : Integer;
 begin
     vUnitType := mState.mData.ArmyData[ParaOwner, ParaIndex].UnitType;
     vTerrainAt := mWorld.TerrainAt(ParaX, ParaY);
 
-    { 1. Primary 5×5 reveal. }
+    { 1. Primary reveal. }
     for vDir := 0 to 24 do
     begin
         vNX := WrapX(ParaX + ConstSpiralX[vDir]);
@@ -549,7 +499,7 @@ begin
         end;
     end;
 
-    { 2. Contact sweep — eight immediate neighbours. }
+    { 2. Contact sweep. }
     vMapFlags := mWorld.MapFlags(ParaX, ParaY);
     vVisBit   := Byte(1 shl ParaOwner);
     for vDir := 1 to 8 do
@@ -561,7 +511,6 @@ begin
         mWorld.SetExplored(ParaOwner, vNX, vNY, True);
         vTileFlags := mWorld.MapFlags(vNX, vNY);
 
-        { Foreign city: mark it visible and register the owner. }
         if (vTileFlags and ConstTileCity) <> 0 then
         begin
             vExistingOwner := mWorld.MapCity(vNX, vNY);
@@ -573,19 +522,18 @@ begin
                         mState.mData.TownBuf[vCityIdx].Size;
                 if mState.mData.UtTypes[vUnitType].Domain = 0 then
                     mState.mData.ArmyData[ParaOwner, ParaIndex].Visibility :=
-                        ShortInt(Byte(mState.mData.ArmyData[ParaOwner, ParaIndex].Visibility)
-                                 or Byte(1 shl vExistingOwner));
+                        mState.mData.ArmyData[ParaOwner, ParaIndex].Visibility
+                        or Byte(1 shl vExistingOwner);
             end;
         end;
 
-        { Adjacent enemy stack: mark visible, clear goto. }
         vExisting := MapStack(vNX, vNY, vExistingOwner);
         if (vExisting <> -1) and (ParaOwner <> vExistingOwner) then
         begin
             if (vMapFlags and ConstTileCity) = 0 then
                 mState.mData.ArmyData[ParaOwner, ParaIndex].Visibility :=
-                    ShortInt(Byte(mState.mData.ArmyData[ParaOwner, ParaIndex].Visibility)
-                             or Byte(1 shl vExistingOwner));
+                    mState.mData.ArmyData[ParaOwner, ParaIndex].Visibility
+                    or Byte(1 shl vExistingOwner);
 
             EachStack(vExistingOwner, vExisting, ValidateRecord);
 
@@ -596,16 +544,17 @@ begin
 
             if (vTileFlags and ConstTileCity) = 0 then
                 mState.mData.ArmyData[vExistingOwner, vExisting].Visibility :=
-                    ShortInt(Byte(mState.mData.ArmyData[vExistingOwner, vExisting].Visibility)
-                             or vVisBit);
+                    mState.mData.ArmyData[vExistingOwner, vExisting].Visibility
+                    or vVisBit;
 
-            { TODO: wire to TCivDiplomacy.DiplomacyEvent(ParaOwner, vExistingOwner,
-              ParaX, ParaY) once the demo has a diplomacy instance available
-              to UnitSight. The C calls this here, before the two gotos below. }
+            { TODO: wire to TCivDiplomacy.DiplomacyEvent(ParaOwner,
+              vExistingOwner, ParaX, ParaY) once the demo exposes a
+              diplomacy instance to UnitSight. The C calls it here, before
+              the two goto-clear branches above. }
         end;
     end;
 
-    { 3. Wider 5×5 sweep for sight&2 units. }
+    { 3. Wider sweep. }
     for vDir := 9 to 24 do
     begin
         vNX := WrapX(ParaX + ConstSpiralX[vDir]);
@@ -624,23 +573,18 @@ begin
         begin
             if (vTileFlags and ConstTileCity) = 0 then
                 mState.mData.ArmyData[vExistingOwner, vExisting].Visibility :=
-                    ShortInt(Byte(mState.mData.ArmyData[vExistingOwner, vExisting].Visibility)
-                             or vVisBit);
+                    mState.mData.ArmyData[vExistingOwner, vExisting].Visibility
+                    or vVisBit;
         end;
     end;
-
-    { 4. Redraw pass (headless: no-op). }
 end;
 
-{ -------------------------------------------------------------------------
-  EnterHut — the four-way reward roll. The message text is handled by the
-  caller via display callbacks; the branch structure is preserved.
-  ------------------------------------------------------------------------- }
 procedure TCivUnitManager.EnterHut(ParaOwner, ParaIndex: Integer);
 var
     vOwnerType, vHomeCity, vDistance, vHutValue, vRoll, vAmount : Integer;
     vBarType, vBarCiv, vBarX, vBarY : Integer;
     vTech, vTries, vNewUnit : Integer;
+    vBarX1, vBarY1 : Integer;
 begin
     if ParaOwner = ConstBarbarianCiv then Exit;
     vOwnerType := mState.mData.ArmyData[ParaOwner, ParaIndex].UnitType;
@@ -663,13 +607,16 @@ begin
     case vRoll of
         0:
         begin
-            { Mercenaries, gold, or an advanced tribe. }
             if vDistance < 4 then
             begin
-                vNewUnit := CreateUnit(ParaOwner,
-                    IfThen(mRng.Scaled(2) <> 0, 3, 6),
-                    mState.mData.ArmyData[ParaOwner, ParaIndex].X,
-                    mState.mData.ArmyData[ParaOwner, ParaIndex].Y);
+                if mRng.Scaled(2) <> 0 then
+                    vNewUnit := CreateUnit(ParaOwner, 3,
+                        mState.mData.ArmyData[ParaOwner, ParaIndex].X,
+                        mState.mData.ArmyData[ParaOwner, ParaIndex].Y)
+                else
+                    vNewUnit := CreateUnit(ParaOwner, 6,
+                        mState.mData.ArmyData[ParaOwner, ParaIndex].X,
+                        mState.mData.ArmyData[ParaOwner, ParaIndex].Y);
                 if vNewUnit = -1 then Exit;
             end else if vHutValue <= 4 then
             begin
@@ -684,7 +631,6 @@ begin
 
         1:
         begin
-            { Scrolls of ancient wisdom, or gold on turn zero / after AD 1000. }
             if (mState.mData.TurnTick = 0) or (mState.mData.Year > 1000) then
                 mState.mData.Money[ParaOwner] := mState.mData.Money[ParaOwner] + 50
             else
@@ -692,16 +638,8 @@ begin
                 vTries := 0;
                 repeat
                     vTech := mRng.Scaled(72);
-                    { The C's condition here is: not already known AND
-                      neither prereq known. Our simplified version accepts
-                      any advance the owner has not yet learned; the caller
-                      can refine. }
                     if (vTech <> 71) and (not HasAdvance(ParaOwner, vTech)) then
                     begin
-                        { give_advance lives on Civ.Economy; the mCityCreate
-                          closure covers city creation only. Leave the tech
-                          reward to be granted via a second callback if you
-                          need it, or drop the branch to gold. }
                         mState.mData.AdvancesKnown[ParaOwner, vTech div 16] :=
                             SmallInt(mState.mData.AdvancesKnown[ParaOwner, vTech div 16]
                                      or SmallInt(1 shl (vTech mod 16)));
@@ -716,41 +654,43 @@ begin
 
         2:
         begin
-            { Valuable metal deposits. }
             mState.mData.Money[ParaOwner] := mState.mData.Money[ParaOwner] + 50;
         end;
 
         3:
         begin
-            { Barbarian horde. }
             if (vDistance < 4) or (mState.mData.CityCount[ParaOwner] = 0) then
             begin
-                vNewUnit := CreateUnit(ParaOwner,
-                    IfThen(mRng.Scaled(2) <> 0, 3, 6),
-                    mState.mData.ArmyData[ParaOwner, ParaIndex].X,
-                    mState.mData.ArmyData[ParaOwner, ParaIndex].Y);
+                if mRng.Scaled(2) <> 0 then
+                    vNewUnit := CreateUnit(ParaOwner, 3,
+                        mState.mData.ArmyData[ParaOwner, ParaIndex].X,
+                        mState.mData.ArmyData[ParaOwner, ParaIndex].Y)
+                else
+                    vNewUnit := CreateUnit(ParaOwner, 6,
+                        mState.mData.ArmyData[ParaOwner, ParaIndex].X,
+                        mState.mData.ArmyData[ParaOwner, ParaIndex].Y);
                 if vNewUnit = -1 then Exit;
             end else
             begin
                 vBarCiv := ConstBarbarianCiv;
                 for vBarType := 1 to 8 do
                 begin
-                    vBarX := WrapX(mState.mData.ArmyData[ParaOwner, ParaIndex].X
-                                   + ConstSpiralX[vBarType]);
-                    vBarY := mState.mData.ArmyData[ParaOwner, ParaIndex].Y
-                             + ConstSpiralY[vBarType];
-                    if (mWorld.MapOwner(vBarX, vBarY) = -1) and
-                       (not mWorld.IsCityTile(vBarX, vBarY)) and
-                       (mWorld.TerrainAt(vBarX, vBarY) <> ConstTerrainOcean) then
+                    vBarX1 := WrapX(mState.mData.ArmyData[ParaOwner, ParaIndex].X
+                                    + ConstSpiralX[vBarType]);
+                    vBarY1 := mState.mData.ArmyData[ParaOwner, ParaIndex].Y
+                              + ConstSpiralY[vBarType];
+                    if (mWorld.MapOwner(vBarX1, vBarY1) = -1) and
+                       (not mWorld.IsCityTile(vBarX1, vBarY1)) and
+                       (mWorld.TerrainAt(vBarX1, vBarY1) <> ConstTerrainOcean) then
                     begin
-                        if mWorld.TerrainMoveCost(vBarX, vBarY) > 2 then
-                            vNewUnit := CreateUnit(vBarCiv, 3, vBarX, vBarY)
+                        if mWorld.TerrainMoveCost(vBarX1, vBarY1) > 2 then
+                            vNewUnit := CreateUnit(vBarCiv, 3, vBarX1, vBarY1)
                         else
-                            vNewUnit := CreateUnit(vBarCiv, 6, vBarX, vBarY);
+                            vNewUnit := CreateUnit(vBarCiv, 6, vBarX1, vBarY1);
                         if vNewUnit <> -1 then
                             mState.mData.ArmyData[vBarCiv, vNewUnit].Visibility :=
-                                ShortInt(Byte(mState.mData.ArmyData[vBarCiv, vNewUnit].Visibility)
-                                         or Byte(1 shl ParaOwner));
+                                mState.mData.ArmyData[vBarCiv, vNewUnit].Visibility
+                                or Byte(1 shl ParaOwner);
                     end;
                 end;
             end;

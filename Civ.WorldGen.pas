@@ -9,6 +9,7 @@ uses
     System.Classes,
     Civ.Types,
     Civ.Core,
+    Civ.Terrains,
     Civ.World,
     Civ.GameState,
     Civ.Pathfinding;
@@ -23,10 +24,10 @@ type
 
     TCivWorldGen = class
     private
-        mWorld : TCivWorld;
-        mState : TCivilizationGameState;
-        mRng   : TCivRandom;
-        mPath  : TCivPathfinder;
+        mWorld     : TCivWorld;
+        mState     : TCivilizationGameState;
+        mRng       : TCivRandom;
+        mPath      : TCivPathfinder;
         mLandCount : Integer;
         mShowStory : Boolean;
 
@@ -35,6 +36,13 @@ type
         procedure MakeRivers;
         procedure NumberRegions;
         procedure ScoreSites;
+        function  LandCorner(ParaX, ParaY: Integer): Integer;
+        function  GenTerrainAt(ParaX, ParaY: Integer): Integer;
+        function  GenRegionAt(ParaX, ParaY: Integer): Integer;
+        function  TerrainAt(ParaX, ParaY: Integer): Integer;
+        function  SiteValue(ParaX, ParaY: Integer): Integer;
+        function  CoarseValid(ParaX, ParaY: Integer): Boolean;
+        procedure ClearScratch;
     public
         constructor Create(ParaWorld: TCivWorld; ParaRng: TCivRandom;
                            ParaPath: TCivPathfinder);
@@ -71,6 +79,36 @@ begin
     inherited;
 end;
 
+function TCivWorldGen.GenTerrainAt(ParaX, ParaY: Integer): Integer;
+begin
+    Result := TerrainAt(ParaX, ParaY);
+end;
+
+function TCivWorldGen.GenRegionAt(ParaX, ParaY: Integer): Integer;
+begin
+    Result := mWorld.RegionKey(ParaX, ParaY);
+end;
+
+function TCivWorldGen.TerrainAt(ParaX, ParaY: Integer): Integer;
+begin
+    Result := mWorld.TerrainAt(ParaX, ParaY);
+end;
+
+function TCivWorldGen.SiteValue(ParaX, ParaY: Integer): Integer;
+begin
+    Result := mWorld.SiteValue(ParaX, ParaY);
+end;
+
+function TCivWorldGen.CoarseValid(ParaX, ParaY: Integer): Boolean;
+begin
+    Result := (ParaX >= 0) and (ParaX < 20) and (ParaY >= 0) and (ParaY < 13);
+end;
+
+procedure TCivWorldGen.ClearScratch;
+begin
+    mWorld.ClearCoarseOceanMap;
+end;
+
 procedure TCivWorldGen.MakeWorld(ParaParams: TWorldGenParams;
     ParaShowStory: Boolean);
 var
@@ -92,7 +130,6 @@ begin
         if mShowStory then StoryStep;
     until mLandCount >= vMaxLand;
 
-    { Border cleanup. }
     for vX := 1 to 78 do
     begin
         for vY := 1 to 48 do
@@ -114,7 +151,6 @@ begin
         if mShowStory then StoryStep;
     end;
 
-    { Terrain by latitude. }
     for vX := 0 to 79 do
     begin
         for vY := 0 to 49 do
@@ -141,7 +177,6 @@ begin
         if mShowStory then StoryStep;
     end;
 
-    { Rainfall. }
     for vY := 0 to 49 do
     begin
         vLat := Abs(25 - vY);
@@ -186,7 +221,6 @@ begin
         if mShowStory then StoryStep;
     end;
 
-    { Age terrain changes. }
     vMaxAge := ParaParams.Age * 800 + 800;
     vX := 0; vY := 0;
     for vI := 0 to vMaxAge - 1 do
@@ -268,11 +302,12 @@ procedure TCivWorldGen.MakeRivers;
 var
     vDir, vOld, vTries, vRivers, vPrev, vStartX, vStartY : Integer;
     vNeighbor, vY, vX, vNearWater, vTile : Integer;
-    vSave : array[0..63999] of Byte;
+    vSave : TBytes;
 begin
     vTries := 0; vRivers := 0;
+    SetLength(vSave, 64000);
     repeat
-        Move(mWorld.Map.Bytes^, vSave, SizeOf(vSave));
+        Move(mWorld.Map.Bytes^, vSave[0], 64000);
         vOld := 0;
         repeat
             vX := mRng.Scaled(80);
@@ -299,7 +334,7 @@ begin
             Inc(vOld);
         until (vNearWater <> 0) or (vTile = 13) or (vTile = 1) or (vTile = 9);
         if ((vNearWater = 0) and (vTile <> 9)) or (vOld < 5) then
-            Move(vSave, mWorld.Map.Bytes^, SizeOf(vSave))
+            Move(vSave[0], mWorld.Map.Bytes^, 64000)
         else
         begin
             Inc(vRivers);
@@ -390,7 +425,8 @@ begin
         begin
             vOrder[vCX] := 15;
             for vY := 1 to 15 do
-                if mState.mData.ContinentSpan[vPass, vCX] > mState.mData.ContinentSpan[vPass, vRanked[vY]] then
+                if mState.mData.ContinentSpan[vPass, vCX] >
+                   mState.mData.ContinentSpan[vPass, vRanked[vY]] then
                 begin
                     for var vP := 15 downto vY + 1 do
                     begin
@@ -429,7 +465,7 @@ end;
 procedure TCivWorldGen.LinkLand(ParaShow: Boolean);
 var
     vCoarseX, vCoarseY, vDir, vNX, vNY, vRepX, vRepY, vRepX2, vRepY2 : Integer;
-    vCost, vSrcID, vDstID : Integer;
+    vCost, vSrcID, vDstID, vDstX, vDstY : Integer;
 begin
     for vCoarseX := 0 to 19 do
         for vCoarseY := 0 to 12 do
@@ -456,7 +492,7 @@ begin
                 vNX := vRepX + ConstSpiralX[vDir] * 4;
                 vNY := vRepY + ConstSpiralY[vDir] * 4;
                 vDstID := -1;
-                var vDstX := vNX; var vDstY := vNY;
+                vDstX := vNX; vDstY := vNY;
                 if mWorld.TerrainAt(vNX, vNY) <> ConstTerrainOcean then
                     vDstID := mWorld.RegionKey(vNX, vNY)
                 else if mWorld.TerrainAt(vNX + 1, vNY) <> ConstTerrainOcean then
@@ -471,12 +507,12 @@ begin
                 if (vCost = -1) or (vCost >= 20) then Continue;
 
                 mWorld.CoarseGroundWay[vCoarseX, vCoarseY] :=
-                    mWorld.CoarseGroundWay[vCoarseX, vCoarseY] or (1 shl (vDir - 1));
+                    Byte(mWorld.CoarseGroundWay[vCoarseX, vCoarseY] or (1 shl (vDir - 1)));
                 vNX := vCoarseX + ConstSpiralX[vDir];
                 vNY := vCoarseY + ConstSpiralY[vDir];
                 if (vNX >= 0) and (vNX < 20) and (vNY >= 0) and (vNY < 13) then
                     mWorld.CoarseGroundWay[vNX, vNY] :=
-                        mWorld.CoarseGroundWay[vNX, vNY] or (1 shl ((vDir + 3) and 7));
+                        Byte(mWorld.CoarseGroundWay[vNX, vNY] or (1 shl ((vDir + 3) and 7)));
             end;
         end;
 end;
@@ -535,12 +571,12 @@ begin
                 if ConstSpiralY[vDir] + vCY < 12 then
                 begin
                     mWorld.CoarseOceanMap[vCX, vCY] :=
-                        mWorld.CoarseOceanMap[vCX, vCY] or (1 shl (vDir - 1));
+                        Byte(mWorld.CoarseOceanMap[vCX, vCY] or (1 shl (vDir - 1)));
                     vNX := ConstSpiralX[vDir] + vCX;
                     vNY := ConstSpiralY[vDir] + vCY;
                     if (vNX >= 0) and (vNX < 20) and (vNY >= 0) and (vNY < 13) then
                         mWorld.CoarseOceanMap[vNX, vNY] :=
-                            mWorld.CoarseOceanMap[vNX, vNY] or (1 shl ((vDir + 3) and 7));
+                            Byte(mWorld.CoarseOceanMap[vNX, vNY] or (1 shl ((vDir + 3) and 7)));
                 end;
             end;
         end;
@@ -549,47 +585,47 @@ begin
 
     for vCY := 0 to 11 do
     begin
-        mWorld.CoarseOceanMap[0, vCY] := mWorld.CoarseOceanMap[0, vCY] or $E0;
-        mWorld.CoarseOceanMap[19, vCY] := mWorld.CoarseOceanMap[19, vCY] or $0E;
+        mWorld.CoarseOceanMap[0, vCY] := Byte(mWorld.CoarseOceanMap[0, vCY] or $E0);
+        mWorld.CoarseOceanMap[19, vCY] := Byte(mWorld.CoarseOceanMap[19, vCY] or $0E);
     end;
-    mWorld.CoarseOceanMap[0, 0] := mWorld.CoarseOceanMap[0, 0] and $7F;
-    mWorld.CoarseOceanMap[0, 11] := mWorld.CoarseOceanMap[0, 11] and $DF;
-    mWorld.CoarseOceanMap[19, 0] := mWorld.CoarseOceanMap[19, 0] and $FD;
-    mWorld.CoarseOceanMap[19, 11] := mWorld.CoarseOceanMap[19, 11] and $F7;
+    mWorld.CoarseOceanMap[0, 0] := Byte(mWorld.CoarseOceanMap[0, 0] and $7F);
+    mWorld.CoarseOceanMap[0, 11] := Byte(mWorld.CoarseOceanMap[0, 11] and $DF);
+    mWorld.CoarseOceanMap[19, 0] := Byte(mWorld.CoarseOceanMap[19, 0] and $FD);
+    mWorld.CoarseOceanMap[19, 11] := Byte(mWorld.CoarseOceanMap[19, 11] and $F7);
 end;
 
 procedure TCivWorldGen.ScoreSites;
 var
     vX, vY, vT, vTotal, vValue, vNX, vNY, vI, vType : Integer;
     vWeights : array[0..23] of Integer;
+    vEntry   : TTerrainType;
 begin
     for var vS := 0 to 15 do
         mState.mData.AiZonePlaces[vS] := 0;
+
+    { Build the yield-weight table exactly as WORLDGEN.C does. }
     for vI := 0 to 23 do
     begin
-        vWeights[vI] := mWorld.TerrainMoveCost(0, 0);   { placeholder overwritten below }
-    end;
-    for vI := 0 to 23 do
-    begin
-        vWeights[vI] := 0;
-        var vFood := 0; var vTrade := 0; var vShields := 0;
-        { Simplified: use const tables via Civ.Terrains }
-        vWeights[vI] := vFood * 3 + vTrade;
+        vEntry := TerrainEntry(vI);
+        vWeights[vI] := vEntry.Food * 3 + vEntry.Trade;
         vType := vI mod 12;
         if (vType <> 2) and (vType <> 11) then
-            vWeights[vI] := vWeights[vI] + vShields * 2;
+            vWeights[vI] := vWeights[vI] + vEntry.Shields * 2;
     end;
 
     for vX := 2 to 77 do
+    begin
         for vY := 2 to 47 do
         begin
             vT := mWorld.TerrainAt(vX, vY);
-            if (vT <> ConstTerrainRiver) and (vT <> ConstTerrainGrassland) and (vT <> ConstTerrainPlains) then
+            if (vT <> ConstTerrainRiver) and (vT <> ConstTerrainGrassland) and
+               (vT <> ConstTerrainPlains) then
             begin
                 mWorld.SetSiteValue(vX, vY, 0);
                 mWorld.SetSavedSiteValue(vX, vY, 0);
                 Continue;
             end;
+
             vTotal := 0;
             for vI := 0 to 20 do
             begin
@@ -603,19 +639,25 @@ begin
                 if mWorld.PatternedCell(vNX, vNY) then
                     Inc(vT, 12);
                 vValue := vValue + vWeights[vT];
-                if vI < 9 then vValue := vValue * 2;
-                if vI = 0 then vValue := vValue * 2;
+                if vI < 9 then
+                    vValue := vValue * 2;
+                if vI = 0 then
+                    vValue := vValue * 2;
                 vTotal := vTotal + vValue;
             end;
+
             vT := mWorld.TerrainAt(vX, vY);
-            if (vT <> ConstTerrainPlains) and (((vX * 7 + vY * 11) and 2) <> 0) then
+            if (vT <> ConstTerrainPlains) and
+               (((vX * 7 + vY * 11) and 2) <> 0) then
                 Dec(vTotal, 16);
+
             vValue := Clamp((vTotal - 120) div 8, 1, 15);
             vValue := vValue div 2 + 8;
             mWorld.SetSiteValue(vX, vY, vValue);
             mWorld.SetSavedSiteValue(vX, vY, vValue);
             Inc(mState.mData.AiZonePlaces[mWorld.RegionKey(vX, vY)]);
         end;
+    end;
 end;
 
 procedure TCivWorldGen.GlobalWarming(ParaSeverity: Integer);

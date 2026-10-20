@@ -36,6 +36,10 @@ type
 
 implementation
 
+{ Forward declarations for the prereq helpers used by PickAITech. }
+function AdvanceEntryPrereq1(ParaIndex: Integer): Integer; forward;
+function AdvanceEntryPrereq2(ParaIndex: Integer): Integer; forward;
+
 constructor TCivEconomy.Create(ParaWorld: TCivWorld; ParaRng: TCivRandom;
     ParaCities: TCivCities);
 begin
@@ -48,8 +52,7 @@ end;
 
 procedure TCivEconomy.CivEconomy(ParaCiv: Integer);
 var
-    vI, vRate, vFlags : Integer;
-    vSci, vToll : Integer;
+    vI, vRate, vFlags, vSci, vToll : Integer;
     vHappy : Boolean;
 begin
     vFlags := 0;
@@ -109,14 +112,17 @@ end;
 
 function TCivEconomy.PickAITech(ParaCiv: Integer): Integer;
 var
-    vI, vRating, vBest, vBestIdx : Integer;
+    vI, vRating, vBest, vBestIdx, vP1, vP2 : Integer;
 begin
-    vBest := -1; vBestIdx := -1;
+    vBest := -1;
+    vBestIdx := -1;
     for vI := 0 to 71 do
     begin
         if HasTech(ParaCiv, vI) then Continue;
-        if (AdvanceEntryPrereq1(vI) >= 0) and (not HasTech(ParaCiv, AdvanceEntryPrereq1(vI))) then Continue;
-        if (AdvanceEntryPrereq2(vI) >= 0) and (not HasTech(ParaCiv, AdvanceEntryPrereq2(vI))) then Continue;
+        vP1 := AdvanceEntryPrereq1(vI);
+        vP2 := AdvanceEntryPrereq2(vI);
+        if (vP1 >= 0) and (not HasTech(ParaCiv, vP1)) then Continue;
+        if (vP2 >= 0) and (not HasTech(ParaCiv, vP2)) then Continue;
         vRating := mRng.Scaled(AdvanceValue(ParaCiv, vI) * 4);
         if vRating > vBest then
         begin vBest := vRating; vBestIdx := vI; end;
@@ -124,23 +130,10 @@ begin
     Result := vBestIdx;
 end;
 
-function AdvanceEntryPrereq1(ParaIndex: Integer): Integer;
-begin
-    if (ParaIndex < 0) or (ParaIndex > 71) then Exit(-1);
-    Result := AdvanceTable[ParaIndex].Prereq1;
-end;
-
-function AdvanceEntryPrereq2(ParaIndex: Integer): Integer;
-begin
-    if (ParaIndex < 0) or (ParaIndex > 71) then Exit(-1);
-    Result := AdvanceTable[ParaIndex].Prereq2;
-end;
-
 procedure TCivEconomy.GiveAdvance(ParaCiv, ParaAdvance, ParaSource: Integer);
 var
-    vWord : Integer;
-    vBit  : SmallInt;
-    vI : Integer;
+    vWord, vI : Integer;
+    vBit : SmallInt;
 begin
     if HasTech(ParaCiv, ParaAdvance) then Exit;
     if ParaAdvance <> 71 then
@@ -172,7 +165,8 @@ function TCivEconomy.StealAdvance(ParaCiv, ParaFromCiv: Integer): Integer;
 var
     vI, vBest, vBestIdx, vRating : Integer;
 begin
-    vBest := -1; vBestIdx := -1;
+    vBest := -1;
+    vBestIdx := -1;
     for vI := 0 to 71 do
         if HasTech(ParaFromCiv, vI) and (not HasTech(ParaCiv, vI)) then
         begin
@@ -183,6 +177,20 @@ begin
     if vBestIdx <> -1 then
         GiveAdvance(ParaCiv, vBestIdx, ParaFromCiv);
     Result := vBestIdx;
+end;
+
+{ --- Definitions matching the forwards above --- }
+
+function AdvanceEntryPrereq1(ParaIndex: Integer): Integer;
+begin
+    if (ParaIndex < 0) or (ParaIndex > 71) then Exit(-1);
+    Result := AdvanceTableData[ParaIndex].Prereq1;
+end;
+
+function AdvanceEntryPrereq2(ParaIndex: Integer): Integer;
+begin
+    if (ParaIndex < 0) or (ParaIndex > 71) then Exit(-1);
+    Result := AdvanceTableData[ParaIndex].Prereq2;
 end;
 
 end.

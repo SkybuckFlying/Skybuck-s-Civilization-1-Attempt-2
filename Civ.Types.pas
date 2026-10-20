@@ -8,7 +8,6 @@ uses
     System.SysUtils;
 
 type
-    { Fixed-width strings as stored in SVE / DGROUP. }
     TCStr12 = array[0..11] of AnsiChar;
     TCStr13 = array[0..12] of AnsiChar;
     TCStr14 = array[0..13] of AnsiChar;
@@ -16,9 +15,6 @@ type
     TCStr20 = array[0..19] of AnsiChar;
     TCStr24 = array[0..23] of AnsiChar;
 
-    { Interop callback signatures. Declared here so units that need to talk
-      across a cycle (Cities ↔ Units, AI → Economy, AI → Diplomacy) share
-      the same type. }
     TCityCreateMethod     = function(ParaPlayer, ParaUnused, ParaX, ParaY, ParaSize: Integer): Integer of object;
     TCreateUnitMethod     = function(ParaOwner, ParaType, ParaX, ParaY: Integer): Integer of object;
     TDropUnitMethod       = procedure(ParaGroup, ParaIndex: Integer) of object;
@@ -70,8 +66,11 @@ type
         Garrison    : array[0..1] of ShortInt;
     end;
 
+    { Status and Visibility are bitfields, treated as unsigned throughout.
+      The C declared them `signed char` but every operation is bitwise on
+      the full byte, so `Byte` is the correct analogue. }
     TUnit = packed record
-        Status     : ShortInt;
+        Status     : Byte;
         X, Y       : Byte;
         UnitType   : ShortInt;
         Moves      : ShortInt;
@@ -79,7 +78,7 @@ type
         GotoX      : ShortInt;
         GotoY      : ShortInt;
         F8         : ShortInt;
-        Visibility : ShortInt;
+        Visibility : Byte;
         Next       : ShortInt;
         HomeCity   : ShortInt;
     end;
@@ -115,7 +114,6 @@ function StringToFixedChars(const ParaText: string; var ParaDest: array of AnsiC
 
 implementation
 
-{ Body of the three helpers is unchanged from Part 1. }
 function FixedCharsToString(const ParaChars: array of AnsiChar): string;
 var
     vAnsi : AnsiString;

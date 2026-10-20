@@ -12,6 +12,13 @@ uses
 type
     ECivMapError = class(Exception);
 
+const
+    { The game's graphics page 2 is always 320×200. Exposing these as unit
+      constants makes them usable from anywhere without a TMapPage instance. }
+    ConstMapPageWidth  = 320;
+    ConstMapPageHeight = 200;
+
+type
     { A decoded 320x200 map page. Pixel indices are what the game's page 2
       stores; extractors like TerrainByte and SiteScore read the well-known
       regions of that page. }
@@ -20,6 +27,8 @@ type
         mPixels  : TBytes;
         mPalette : TCivPalette;
         function  GetBytes: PByte;
+        function  GetWidth: Integer;
+        function  GetHeight: Integer;
     public
         constructor Create;
         destructor Destroy; override;
@@ -37,8 +46,8 @@ type
         function  Region(ParaX, ParaY: Integer): Byte;
 
         property Bytes:   PByte       read GetBytes;
-        property Width:   Integer     read 320;
-        property Height:  Integer     read 200;
+        property Width:   Integer     read GetWidth;
+        property Height:  Integer     read GetHeight;
         property Palette: TCivPalette read mPalette;
     end;
 
@@ -65,9 +74,19 @@ begin
         Result := @mPixels[0];
 end;
 
+function TMapPage.GetWidth: Integer;
+begin
+    Result := ConstMapPageWidth;
+end;
+
+function TMapPage.GetHeight: Integer;
+begin
+    Result := ConstMapPageHeight;
+end;
+
 procedure TMapPage.Clear;
 begin
-    SetLength(mPixels, 320 * 200);
+    SetLength(mPixels, ConstMapPageWidth * ConstMapPageHeight);
     FillChar(mPixels[0], Length(mPixels), 0);
 end;
 
@@ -81,12 +100,14 @@ begin
         if vImage = nil then
             raise ECivMapError.CreateFmt('%s: not a valid picture file',
                 [ParaFileName]);
-        if (vImage.Width <> 320) or (vImage.Height <> 200) then
+        if (vImage.Width <> ConstMapPageWidth) or
+           (vImage.Height <> ConstMapPageHeight) then
             raise ECivMapError.CreateFmt('%s: unexpected size %dx%d '
-                + '(expected 320x200)',
-                [ParaFileName, vImage.Width, vImage.Height]);
+                + '(expected %dx%d)',
+                [ParaFileName, vImage.Width, vImage.Height,
+                 ConstMapPageWidth, ConstMapPageHeight]);
         mPixels := vImage.Pixels;
-        SetLength(mPixels, 320 * 200);
+        SetLength(mPixels, ConstMapPageWidth * ConstMapPageHeight);
         for vI := 0 to 255 do
             mPalette.SetEntry(vI, vImage.Palette.Entry(vI));
         mPalette.StartIdx := vImage.Palette.StartIdx;
@@ -108,18 +129,20 @@ end;
 
 function TMapPage.Pixel(ParaX, ParaY: Integer): Byte;
 begin
-    if (ParaX < 0) or (ParaX >= 320) or (ParaY < 0) or (ParaY >= 200) or
-       (Length(mPixels) < 320 * 200) then
+    if (ParaX < 0) or (ParaX >= ConstMapPageWidth) or
+       (ParaY < 0) or (ParaY >= ConstMapPageHeight) or
+       (Length(mPixels) < ConstMapPageWidth * ConstMapPageHeight) then
         Exit(0);
-    Result := mPixels[ParaY * 320 + ParaX];
+    Result := mPixels[ParaY * ConstMapPageWidth + ParaX];
 end;
 
 procedure TMapPage.SetPixel(ParaX, ParaY: Integer; ParaValue: Byte);
 begin
-    if (ParaX < 0) or (ParaX >= 320) or (ParaY < 0) or (ParaY >= 200) or
-       (Length(mPixels) < 320 * 200) then
+    if (ParaX < 0) or (ParaX >= ConstMapPageWidth) or
+       (ParaY < 0) or (ParaY >= ConstMapPageHeight) or
+       (Length(mPixels) < ConstMapPageWidth * ConstMapPageHeight) then
         Exit;
-    mPixels[ParaY * 320 + ParaX] := ParaValue;
+    mPixels[ParaY * ConstMapPageWidth + ParaX] := ParaValue;
 end;
 
 function TMapPage.SiteScore(ParaX, ParaY: Integer): Byte;

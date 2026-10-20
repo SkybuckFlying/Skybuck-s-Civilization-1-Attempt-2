@@ -52,7 +52,6 @@ type
         procedure CompleteProduction(ParaCity, ParaCostScale, ParaMode: Integer);
         function  FindSlotInternal(ParaCiv, ParaCity: Integer): Integer;
         function  HasTech(ParaCiv, ParaAdvance: Integer): Boolean;
-
     public
         constructor Create(ParaWorld: TCivWorld; ParaRng: TCivRandom);
         destructor Destroy; override;
@@ -78,6 +77,12 @@ type
     end;
 
 implementation
+
+{ Forward declarations: the improvement table lookups are used by
+  CityProcess and CompleteProduction but defined below. }
+function ImprovementCost(ParaId: Integer): Integer; forward;
+function ImprovementMaint(ParaId: Integer): Integer; forward;
+function ImprovementPrereq(ParaId: Integer): Integer; forward;
 
 const
     ConstImprovementWords: array[0..21] of ShortInt = (
@@ -106,9 +111,6 @@ begin
     mDropUnit := ParaDrop;
 end;
 
-{ -------------------------------------------------------------------------
-  Helpers (unchanged from Part 4).
-  ------------------------------------------------------------------------- }
 function TCivCities.GetSpecialist(ParaCity, ParaIndex: Integer): Integer;
 var
     vState : Integer;
@@ -230,9 +232,8 @@ end;
 function TCivCities.CountHomeTroops(ParaCity: Integer;
     out ParaHome, ParaAbroad: Integer): Integer;
 var
-    vOwner, vI : Integer;
+    vOwner, vI, vKeep : Integer;
     vUnit : TUnit;
-    vKeep : Integer;
 begin
     vOwner := mState.mData.TownBuf[ParaCity].Owner;
     ParaHome := CountGarrison(ParaCity);
@@ -262,8 +263,8 @@ end;
 procedure TCivCities.AssignWorkers(ParaCity, ParaMode, ParaSettlerFood: Integer);
 var
     vSize, vOwner, vI, vWorkers, vBestIdx, vBestFood, vBestScore, vScoreE : Integer;
-    vFood, vShields, vTrade : Integer;
-    vTileX, vTileY, vNeedFood, vGov, vOtherCity, vDist : Integer;
+    vFood, vShields, vTrade, vTileX, vTileY, vNeedFood, vGov,
+    vOtherCity, vDist, vOwnerHere : Integer;
     vTileTaken : array[0..20] of Boolean;
     vBlocked : array[0..4, 0..4] of Boolean;
     vWorkedLo : LongWord;
@@ -306,7 +307,7 @@ begin
         vTileY := mState.mData.TownBuf[ParaCity].Y + ConstRadiusDY[vI];
         if (vOwner <> 0) and (not mWorld.IsExplored(vOwner, vTileX, vTileY)) then
             vTileTaken[vI] := True;
-        var vOwnerHere := mWorld.MapOwner(vTileX, vTileY);
+        vOwnerHere := mWorld.MapOwner(vTileX, vTileY);
         if (vOwnerHere <> -1) and (vOwnerHere <> vOwner) then
         begin
             vTileTaken[vI] := True;
@@ -537,7 +538,6 @@ begin
 
     vSize := mState.mData.TownBuf[ParaCity].Size;
     mCityKeep := CountHomeTroops(ParaCity, mHomeTroops, mUnitsAbroad);
-
     AssignWorkers(ParaCity, ParaMode, vSettlerFood);
 
     vBuildings := mState.mData.TownBuf[ParaCity].Buildings;
@@ -695,61 +695,15 @@ begin
     Result := mTownHappy - mTownUnhappy;
 end;
 
-{ Improvement cost and maintenance tables from GAME.C. Kept here because
-  Civ.Cities is the only consumer. }
-function ImprovementCost(ParaId: Integer): Integer;
-begin
-    case ParaId of
-        1: Result := 20;  2: Result := 4;  3: Result := 6;
-        4: Result := 4;   5: Result := 8;  6: Result := 8;
-        7: Result := 8;   8: Result := 12; 9: Result := 12;
-       10: Result := 12; 11: Result := 16; 12: Result := 16;
-       13: Result := 16; 14: Result := 10; 15: Result := 20;
-       16: Result := 32; 17: Result := 20; 18: Result := 20;
-       19: Result := 16; 20: Result := 24; 21: Result := 16;
-       22: Result := 8;  23: Result := 16; 24: Result := 32;
-       25: Result := 30; 26: Result := 30; 27: Result := 20;
-       28: Result := 20; 29: Result := 30; 30: Result := 30;
-       31: Result := 30; 32: Result := 40; 33: Result := 30;
-       34: Result := 30; 35: Result := 40; 36: Result := 40;
-       37: Result := 40; 38: Result := 30; 39: Result := 60;
-       40: Result := 60; 41: Result := 60; 42: Result := 60;
-       43: Result := 60; 44: Result := 60; 45: Result := 60;
-    else Result := 0;
-    end;
-end;
-
-function ImprovementMaint(ParaId: Integer): Integer;
-begin
-    case ParaId of
-        1: Result := 5;  2: Result := 0;  3: Result := 1;
-        4: Result := 1;  5: Result := 1;  6: Result := 1;
-        7: Result := 1;  8: Result := 2;  9: Result := 2;
-       10: Result := 3; 11: Result := 3; 12: Result := 3;
-       13: Result := 4; 14: Result := 4; 15: Result := 4;
-       16: Result := 6; 17: Result := 4; 18: Result := 2;
-       19: Result := 4; 20: Result := 4; 21: Result := 2;
-    else Result := 0;
-    end;
-end;
-
-{ -------------------------------------------------------------------------
-  FindSlotAI — public entry, used by both Economy and Turn.
-
-  The scoring loop is a preserved-but-condensed version of find_slot().
-  The exact weights from the C are kept; the interactive menu path (which
-  would only run for human players) is skipped.
-  ------------------------------------------------------------------------- }
 function TCivCities.FindSlotInternal(ParaCiv, ParaCity: Integer): Integer;
 var
     vCand : array[0..127] of Integer;
-    vNCand : Integer;
-    vI, vJ : Integer;
+    vNCand, vI, vJ : Integer;
     vHave, vOrdered : array[0..27] of Integer;
     vTotal, vLand, vAreaRole : Integer;
     vMilArea, vDanger : Boolean;
     vFoodSurplus, vBestAll, vBestIdx, vBestUnitRank, vBestUnitIdx : Integer;
-    vRank, vWhat, vBuildings, vGov : Integer;
+    vRank, vWhat : Integer;
 begin
     if (mState.mData.HumanSet and (1 shl ParaCiv)) <> 0 then Exit(-1);
 
@@ -877,28 +831,6 @@ end;
 function TCivCities.FindSlotAI(ParaCiv, ParaCity: Integer): Integer;
 begin
     Result := FindSlotInternal(ParaCiv, ParaCity);
-end;
-
-function ImprovementPrereq(ParaId: Integer): Integer;
-begin
-    case ParaId of
-        1: Result := 16;  2: Result := -1; 3: Result := 42;
-        4: Result := 25;  5: Result := 2;  6: Result := 22;
-        7: Result := 1;   8: Result := 16; 9: Result := 45;
-       10: Result := 53; 11: Result := 29; 12: Result := 13;
-       13: Result := 41; 14: Result := 45; 15: Result := 35;
-       16: Result := 63; 17: Result := 57; 18: Result := 61;
-       19: Result := 55; 20: Result := 15; 21: Result := 50;
-       22: Result := 40; 23: Result := 60; 24: Result := 63;
-       25: Result := 16; 26: Result := 42; 27: Result := 17;
-       28: Result := 7;  29: Result := 30; 30: Result := 26;
-       31: Result := 16; 32: Result := 8;  33: Result := 29;
-       34: Result := 6;  35: Result := 10; 36: Result := 51;
-       37: Result := 29; 38: Result := 49; 39: Result := 15;
-       40: Result := 35; 41: Result := 27; 42: Result := 43;
-       43: Result := 40; 44: Result := 21; 45: Result := 59;
-    else Result := -1;
-    end;
 end;
 
 function TCivCities.CityCreate(ParaPlayer, ParaUnused, ParaX, ParaY, ParaSize: Integer): Integer;
@@ -1040,6 +972,66 @@ begin
                  mState.mData.TownBuf[ParaCity].FoodBox := 0;
                  mState.mData.TownBuf[ParaCity].ShieldBox := 0;
              end;
+    end;
+end;
+
+{ --- Improvement table helpers (definitions matching the forwards above) --- }
+
+function ImprovementCost(ParaId: Integer): Integer;
+begin
+    case ParaId of
+        1: Result := 20;  2: Result := 4;  3: Result := 6;
+        4: Result := 4;   5: Result := 8;  6: Result := 8;
+        7: Result := 8;   8: Result := 12; 9: Result := 12;
+       10: Result := 12; 11: Result := 16; 12: Result := 16;
+       13: Result := 16; 14: Result := 10; 15: Result := 20;
+       16: Result := 32; 17: Result := 20; 18: Result := 20;
+       19: Result := 16; 20: Result := 24; 21: Result := 16;
+       22: Result := 8;  23: Result := 16; 24: Result := 32;
+       25: Result := 30; 26: Result := 30; 27: Result := 20;
+       28: Result := 20; 29: Result := 30; 30: Result := 30;
+       31: Result := 30; 32: Result := 40; 33: Result := 30;
+       34: Result := 30; 35: Result := 40; 36: Result := 40;
+       37: Result := 40; 38: Result := 30; 39: Result := 60;
+       40: Result := 60; 41: Result := 60; 42: Result := 60;
+       43: Result := 60; 44: Result := 60; 45: Result := 60;
+    else Result := 0;
+    end;
+end;
+
+function ImprovementMaint(ParaId: Integer): Integer;
+begin
+    case ParaId of
+        1: Result := 5;  2: Result := 0;  3: Result := 1;
+        4: Result := 1;  5: Result := 1;  6: Result := 1;
+        7: Result := 1;  8: Result := 2;  9: Result := 2;
+       10: Result := 3; 11: Result := 3; 12: Result := 3;
+       13: Result := 4; 14: Result := 4; 15: Result := 4;
+       16: Result := 6; 17: Result := 4; 18: Result := 2;
+       19: Result := 4; 20: Result := 4; 21: Result := 2;
+    else Result := 0;
+    end;
+end;
+
+function ImprovementPrereq(ParaId: Integer): Integer;
+begin
+    case ParaId of
+        1: Result := 16;  2: Result := -1; 3: Result := 42;
+        4: Result := 25;  5: Result := 2;  6: Result := 22;
+        7: Result := 1;   8: Result := 16; 9: Result := 45;
+       10: Result := 53; 11: Result := 29; 12: Result := 13;
+       13: Result := 41; 14: Result := 45; 15: Result := 35;
+       16: Result := 63; 17: Result := 57; 18: Result := 61;
+       19: Result := 55; 20: Result := 15; 21: Result := 50;
+       22: Result := 40; 23: Result := 60; 24: Result := 63;
+       25: Result := 16; 26: Result := 42; 27: Result := 17;
+       28: Result := 7;  29: Result := 30; 30: Result := 26;
+       31: Result := 16; 32: Result := 8;  33: Result := 29;
+       34: Result := 6;  35: Result := 10; 36: Result := 51;
+       37: Result := 29; 38: Result := 49; 39: Result := 15;
+       40: Result := 35; 41: Result := 27; 42: Result := 43;
+       43: Result := 40; 44: Result := 21; 45: Result := 59;
+    else Result := -1;
     end;
 end;
 

@@ -1,35 +1,39 @@
-﻿program Civ.Demo;
+program Civ.Demo;
 
 {$APPTYPE CONSOLE}
 
 uses
-    System.SysUtils,
-    System.Classes,
-    Civ.Types,
-    Civ.Core,
-    Civ.GameState,
-    Civ.MapFile,
-    Civ.World,
-    Civ.Terrains,
-    Civ.Combat,
-    Civ.Units,
-    Civ.Pathfinding,
-    Civ.TileYields,
-    Civ.Cities,
-    Civ.Economy,
-    Civ.AI,
-    Civ.Turn,
-    Civ.WorldGen,
-    Civ.NewGame,
-    Civ.Tables,
-    Civ.Diplomacy;
+  System.SysUtils,
+  System.Classes,
+  Civ.AI in 'Civ.AI.pas',
+  Civ.Cities in 'Civ.Cities.pas',
+  Civ.Combat in 'Civ.Combat.pas',
+  Civ.Core in 'Civ.Core.pas',
+  Civ.Diplomacy in 'Civ.Diplomacy.pas',
+  Civ.Economy in 'Civ.Economy.pas',
+  Civ.FileCheck in 'Civ.FileCheck.pas',
+  Civ.GameData in 'Civ.GameData.pas',
+  Civ.GameState in 'Civ.GameState.pas',
+  Civ.ImageFormat in 'Civ.ImageFormat.pas',
+  Civ.MapFile in 'Civ.MapFile.pas',
+  Civ.Mouse in 'Civ.Mouse.pas',
+  Civ.NewGame in 'Civ.NewGame.pas',
+  Civ.Palette in 'Civ.Palette.pas',
+  Civ.Pathfinding in 'Civ.Pathfinding.pas',
+  Civ.Raster in 'Civ.Raster.pas',
+  Civ.Tables in 'Civ.Tables.pas',
+  Civ.Terrains in 'Civ.Terrains.pas',
+  Civ.TileYields in 'Civ.TileYields.pas',
+  Civ.Timer in 'Civ.Timer.pas',
+  Civ.Turn in 'Civ.Turn.pas',
+  Civ.Types in 'Civ.Types.pas',
+  Civ.Units in 'Civ.Units.pas',
+  Civ.World in 'Civ.World.pas',
+  Civ.WorldGen in 'Civ.WorldGen.pas';
 
 type
-    { Wraps TCivCities so that its CityCreate and FindSlotAI methods can be
-      passed to Civ.AI (which needs them for settler-found and AI production
-      retargeting) and to Civ.Units (which needs CityCreate for the hut's
-      "advanced tribe" reward). The wrapper exists because both methods must
-      arrive as method-of-object pointers on the *same* instance. }
+    { Wraps TCivCities so its methods can be passed as method-of-object
+      pointers to Civ.AI and Civ.Units. }
     TCityHooks = class
     public
         FCities : TCivCities;
@@ -38,18 +42,8 @@ type
     end;
 
 var
-    { Single, process-wide state cursor. Set once after TCivilizationGameState
-      is constructed; cleared at program end. The Tribes table uses it to look
-      up civ-tribe indices without every table accessor needing a state param.
-      A process-wide cursor is safe here because the demo runs single-threaded
-      and constructs exactly one game. Multi-game hosts should refactor
-      Civ.Tables to take the state explicitly. }
     gStateCursor : TCivilizationGameState = nil;
 
-{ -------------------------------------------------------------------------
-  TribeCursor — installed once via TCivTables.SetTribeCursor. Reads from the
-  process-wide state. Falls back to identity if called before registration.
-  ------------------------------------------------------------------------- }
 function TribeCursor(ParaCiv: Integer): Integer;
 begin
     if Assigned(gStateCursor) then
@@ -58,9 +52,6 @@ begin
         Result := ParaCiv;
 end;
 
-{ -------------------------------------------------------------------------
-  TCityHooks — forwards to the wrapped TCivCities.
-  ------------------------------------------------------------------------- }
 function TCityHooks.CityCreate(
     ParaPlayer, ParaUnused, ParaX, ParaY, ParaSize: Integer): Integer;
 begin
@@ -72,10 +63,6 @@ begin
     Result := FCities.FindSlotAI(ParaCiv, ParaCity);
 end;
 
-{ -------------------------------------------------------------------------
-  PrintMap — ASCII dump of the world. Ocean is a space, terrain uses single
-  characters, so a 320×50 block is legible in any console.
-  ------------------------------------------------------------------------- }
 procedure PrintMap(ParaWorld: TCivWorld);
 var
     vX, vY : Integer;
@@ -109,11 +96,6 @@ begin
     Writeln;
 end;
 
-{ -------------------------------------------------------------------------
-  PrintCivSummary — one line for the human, one line per living rival.
-  Government is shown as the numeric ID (0=Anarchy … 5=Democracy) so the
-  output stays legible without needing the government_names table here.
-  ------------------------------------------------------------------------- }
 procedure PrintCivSummary(ParaState: TCivilizationGameState);
 var
     vCiv, vActive : Integer;
@@ -124,14 +106,11 @@ begin
          ParaState.mData.Money[ParaState.mData.CivNow],
          ParaState.mData.CityCount[ParaState.mData.CivNow],
          ParaState.mData.TechCount[ParaState.mData.CivNow]]));
-
     vActive := 0;
     for vCiv := 1 to 7 do
     begin
-        if (ParaState.mData.Players and (1 shl vCiv)) = 0 then
-            Continue;
-        if vCiv = ParaState.mData.CivNow then
-            Continue;
+        if (ParaState.mData.Players and (1 shl vCiv)) = 0 then Continue;
+        if vCiv = ParaState.mData.CivNow then Continue;
         Inc(vActive);
         Writeln(Format('    [%d] %-16s gov=%d $%d cities=%d techs=%d',
             [vCiv,
@@ -145,9 +124,6 @@ begin
         Writeln('    (no rival civs remain)');
 end;
 
-{ -------------------------------------------------------------------------
-  Usage — printed on missing arguments or bad flags.
-  ------------------------------------------------------------------------- }
 procedure PrintUsage;
 begin
     Writeln('Civ.Demo — headless driver for the Delphi 13 Civilization port');
@@ -159,16 +135,10 @@ begin
     Writeln('Options:');
     Writeln('  --turns N        number of turns to run (default 20)');
     Writeln('  --show-map       print an ASCII dump of the world after setup');
-    Writeln('  --save FILE.SVE  write the final state to FILE.SVE and FILE.MAP');
+    Writeln('  --save FILE.SVE  write the final state to FILE.SVE');
 end;
 
-{ -------------------------------------------------------------------------
-  Main.
-  ------------------------------------------------------------------------- }
 var
-    { Full object graph. Nil-initialised before the try so that partial
-      construction (e.g. LoadFromFile raising) leaves the finally block
-      safe to run. }
     vState   : TCivilizationGameState = nil;
     vMap     : TMapPage               = nil;
     vWorld   : TCivWorld              = nil;
@@ -195,7 +165,6 @@ var
     vI           : Integer;
     vContinued   : Boolean;
 begin
-    { ---- Argument parsing. ---------------------------------------------- }
     vTurns := 20;
     vNewGameMode := False;
     vShowMap := False;
@@ -243,12 +212,10 @@ begin
     if vTurns < 0 then
         vTurns := 0;
 
-    { ---- Layout verification. ------------------------------------------- }
     if not TCivilizationGameState.VerifyLayout(vMsg) then
     begin
         Writeln('Layout FAILURE: ', vMsg);
         Writeln;
-        Writeln('The packed record does not match the SVE offset table.');
         Writeln('Common causes:');
         Writeln('  - BlockGroundWay declared as ShortInt instead of Byte');
         Writeln('  - packed record missing on one of the record types');
@@ -258,18 +225,13 @@ begin
     Writeln('Layout OK (SizeOf(TGameStateData) = ', ConstSaveFileSize, ').');
 
     try
-        { ---- Build the graph. ------------------------------------------- }
         vState := TCivilizationGameState.Create;
         gStateCursor := vState;
         vMap := TMapPage.Create;
         vWorld := TCivWorld.Create(vState, vMap);
 
         if vNewGameMode then
-        begin
-            { Deterministic for the demo so that repeated runs produce the
-              same map and can be diffed. Change the seed for variety. }
-            vRng := TCivRandom.Create(12345);
-        end
+            vRng := TCivRandom.Create(12345)
         else
         begin
             Writeln('Loading ', ExtractFileName(vSaveFile), '...');
@@ -291,14 +253,10 @@ begin
 
         if not vNewGameMode then
         begin
-            { Coarse ocean connectivity is runtime state; it is not in the
-              SVE. The land connectivity (BlockGroundWay) *is* saved, so
-              only LinkSeas needs to run. }
+            { Coarse sea connectivity is runtime-only; rebuild it after load. }
             vGen.LinkSeas(False);
         end;
 
-        { Services. Order is informational: they hold references but do
-          not call each other during construction. }
         vCombat  := TCivCombat.Create(vWorld, vRng);
         vUnits   := TCivUnitManager.Create(vWorld, vRng);
         vYields  := TCivTileYields.Create(vWorld);
@@ -309,41 +267,35 @@ begin
         vTurn    := TCivTurn.Create(vWorld, vRng, vCombat, vUnits,
                                     vCities, vEconomy, vAI, vDiplo);
 
-        { ---- Wire every callback before any turn can run. --------------- }
+        { Wire all callbacks. }
         vHooks := TCityHooks.Create;
         vHooks.FCities := vCities;
-
         TCivTables.SetTribeCursor(TribeCursor);
         vCities.SetUnitHooks(vUnits.CreateUnit, vUnits.DropUnit);
-        vUnits.RegisterCityCreate(vHooks.CityCreate);
+        RegisterCityCreate(vHooks.CityCreate);
         vAI.SetHooks(vHooks.CityCreate, vHooks.FindSlot,
                      vEconomy.AdvanceValue, vDiplo.SetGovernment);
 
-        { ---- New-game setup (needs the services above to be alive). ----- }
         if vNewGameMode then
         begin
             Writeln('Generating new world...');
             vNewGame := TCivNewGame.Create(vWorld, vRng, vGen, vCities, vUnits);
-
             var vParams : TNewGameParams;
-            vParams.Difficulty  := 1;      { Warlord }
-            vParams.NumCivs     := 4;      { 5 total civs (you + 4 rivals) }
-            vParams.PlayerTribe := 1;      { Romans }
+            vParams.Difficulty  := 1;
+            vParams.NumCivs     := 4;
+            vParams.PlayerTribe := 1;
             vParams.WorldParams.LandMass    := 1;
             vParams.WorldParams.Temperature := 1;
             vParams.WorldParams.Climate     := 1;
             vParams.WorldParams.Age         := 1;
             vParams.ShowStory   := False;
-
             vNewGame.Setup(vParams);
             Writeln('World generated.');
         end;
 
-        { ---- Optional map dump. ----------------------------------------- }
         if vShowMap then
             PrintMap(vWorld);
 
-        { ---- Run. ------------------------------------------------------- }
         Writeln;
         Writeln(Format('=== Turn %d (year %d) ===',
             [vState.mData.TurnTick, vState.mData.Year]));
@@ -359,12 +311,10 @@ begin
                 vContinued := False;
                 Break;
             end;
-
             Writeln;
             Writeln(Format('=== Turn %d (year %d) ===',
                 [vState.mData.TurnTick, vState.mData.Year]));
             PrintCivSummary(vState);
-
             if vTurn.LastMessages.Count > 0 then
             begin
                 for var vMsgLine := 0 to vTurn.LastMessages.Count - 1 do
@@ -373,7 +323,6 @@ begin
             end;
         end;
 
-        { ---- Wrap up. --------------------------------------------------- }
         Writeln;
         Writeln(Format('Final: turn=%d, year=%d, you=%s, %d cities, %d techs, $%d',
             [vState.mData.TurnTick,
@@ -383,26 +332,28 @@ begin
              vState.mData.TechCount[vState.mData.CivNow],
              vState.mData.Money[vState.mData.CivNow]]));
         if not vContinued then
-            Writeln('Game ended (ship arrival or dynasty end).');
+            Writeln('Game ended.');
 
-        { ---- Optional save-out. ----------------------------------------- }
         if vSaveOut <> '' then
         begin
             Writeln;
             Writeln('Saving final state to ', vSaveOut, '...');
             try
                 vState.SaveToFile(vSaveOut);
-                vMap.SaveToFile(ChangeFileExt(vSaveOut, '.MAP'));
                 Writeln('  wrote ', vSaveOut);
-                Writeln('  wrote ', ChangeFileExt(vSaveOut, '.MAP'));
+                try
+                    vMap.SaveToFile(ChangeFileExt(vSaveOut, '.MAP'));
+                    Writeln('  wrote ', ChangeFileExt(vSaveOut, '.MAP'));
+                except
+                    on E: Exception do
+                        Writeln('  MAP save skipped: ', E.Message);
+                end;
             except
                 on E: Exception do
                     Writeln('  save failed: ', E.Message);
             end;
         end;
     finally
-        { Free in reverse dependency order. Every field is either assigned
-          or still nil; TObject.Free handles nil gracefully. }
         vHooks.Free;
         vNewGame.Free;
         vTurn.Free;
