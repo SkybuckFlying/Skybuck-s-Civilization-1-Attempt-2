@@ -12,87 +12,113 @@ uses
 type
     ECivMapError = class(Exception);
 
-    { A decoded 320x200 pixel page (graphics page 2 = the map database). }
+    { A decoded 320x200 map page. Pixel indices are what the game's page 2
+      stores; extractors like TerrainByte and SiteScore read the well-known
+      regions of that page. }
     TMapPage = class
     private
-        mPixels : array[0..63999] of Byte;
+        mPixels  : TBytes;
+        mPalette : TCivPalette;
+        function  GetBytes: PByte;
     public
+        constructor Create;
+        destructor Destroy; override;
+
         procedure Clear;
         procedure LoadFromFile(const ParaFileName: string);
         procedure SaveToFile(const ParaFileName: string);
-        function Pixel(ParaX, ParaY: Integer): Byte;
+
+        function  Pixel(ParaX, ParaY: Integer): Byte;
         procedure SetPixel(ParaX, ParaY: Integer; ParaValue: Byte);
-        { Byte at (X + 80, Y) - the "site score / territory" layer. }
-        function SiteScore(ParaX, ParaY: Integer): Byte;
-        { Byte at (X, Y) - the encoded terrain. }
-        function TerrainByte(ParaX, ParaY: Integer): Byte;
-        { Byte at (X + 160, Y) - low 3 bits = owner, bit 3 = units. }
-        function Occupancy(ParaX, ParaY: Integer): Byte;
-        { Byte at (X, Y + 50) - ranked land region. }
-        function Region(ParaX, ParaY: Integer): Byte;
+
+        function  SiteScore(ParaX, ParaY: Integer): Byte;
+        function  TerrainByte(ParaX, ParaY: Integer): Byte;
+        function  Occupancy(ParaX, ParaY: Integer): Byte;
+        function  Region(ParaX, ParaY: Integer): Byte;
+
+        property Bytes:   PByte       read GetBytes;
+        property Width:   Integer     read 320;
+        property Height:  Integer     read 200;
+        property Palette: TCivPalette read mPalette;
     end;
 
 implementation
 
+constructor TMapPage.Create;
+begin
+    inherited;
+    mPalette := TCivPalette.Create;
+    Clear;
+end;
+
+destructor TMapPage.Destroy;
+begin
+    mPalette.Free;
+    inherited;
+end;
+
+function TMapPage.GetBytes: PByte;
+begin
+    if Length(mPixels) = 0 then
+        Result := nil
+    else
+        Result := @mPixels[0];
+end;
+
 procedure TMapPage.Clear;
 begin
-    FillChar(mPixels, SizeOf(mPixels), 0);
+    SetLength(mPixels, 320 * 200);
+    FillChar(mPixels[0], Length(mPixels), 0);
 end;
 
 procedure TMapPage.LoadFromFile(const ParaFileName: string);
 var
-    vStream : TFileStream;
-    vWidth  : Word;
-    vHeight : Word;
+    vImage : TCivImage;
+    vI     : Integer;
 begin
-    vStream := TFileStream.Create(ParaFileName, fmOpenRead or fmShareDenyNone);
+    vImage := ReadCivImage(ParaFileName, mPalette);
     try
-        if not ReadImageHeader(vStream, vWidth, vHeight) then
-        begin
-            raise ECivMapError.CreateFmt(
-                '%s: not a valid image/map file', [ParaFileName]);
-        end;
-        if (vWidth <> 320) or (vHeight <> 200) then
-        begin
-            raise ECivMapError.CreateFmt(
-                '%s: unexpected map size %dx%d (expected 320x200)',
-                [ParaFileName, vWidth, vHeight]);
-        end;
-        DecodeRLE(vStream, @mPixels[0], SizeOf(mPixels));
+        if vImage = nil then
+            raise ECivMapError.CreateFmt('%s: not a valid picture file',
+                [ParaFileName]);
+        if (vImage.Width <> 320) or (vImage.Height <> 200) then
+            raise ECivMapError.CreateFmt('%s: unexpected size %dx%d '
+                + '(expected 320x200)',
+                [ParaFileName, vImage.Width, vImage.Height]);
+        mPixels := vImage.Pixels;
+        SetLength(mPixels, 320 * 200);
+        for vI := 0 to 255 do
+            mPalette.SetEntry(vI, vImage.Palette.Entry(vI));
+        mPalette.StartIdx := vImage.Palette.StartIdx;
+        mPalette.EndIdx   := vImage.Palette.EndIdx;
+        mPalette.Loaded   := vImage.Palette.Loaded;
     finally
-        vStream.Free;
+        vImage.Free;
     end;
 end;
 
 procedure TMapPage.SaveToFile(const ParaFileName: string);
-var
-    vStream : TFileStream;
 begin
-    vStream := TFileStream.Create(ParaFileName, fmCreate);
-    try
-        WriteImageHeader(vStream, 320, 200);
-        EncodeRLE(@mPixels[0], SizeOf(mPixels), vStream);
-    finally
-        vStream.Free;
-    end;
+    { Writing the game's picture format requires the LZW encoder, which is
+      not part of this port yet. The reader path covers loading and inspecting
+      saves; writing .MAP back to disk is deferred until the encoder is
+      ported from IMAGE.C. }
+    raise ECivMapError.Create('saving .MAP files is not implemented yet');
 end;
 
 function TMapPage.Pixel(ParaX, ParaY: Integer): Byte;
 begin
-    if (ParaX < 0) or (ParaX >= 320) or (ParaY < 0) or (ParaY >= 200) then
-    begin
-        Result := 0;
-        Exit;
-    end;
+    if (ParaX < 0) or (ParaX >= 320) or (ParaY < 0) or (ParaY >= 200) or
+       (Length(mPixels) < 320 * 200) then
+        Exit(0);
     Result := mPixels[ParaY * 320 + ParaX];
 end;
 
 procedure TMapPage.SetPixel(ParaX, ParaY: Integer; ParaValue: Byte);
 begin
-    if (ParaX < 0) or (ParaX >= 320) or (ParaY < 0) or (ParaY >= 200) then
-    begin
+    if (ParaX < 0) or (ParaX >= 320) or (ParaY < 0) or (ParaY >= 200) or
+       (Length(mPixels) < 320 * 200) then
         Exit;
-    end;
     mPixels[ParaY * 320 + ParaX] := ParaValue;
 end;
 

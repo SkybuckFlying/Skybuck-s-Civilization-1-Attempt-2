@@ -7,29 +7,35 @@ interface
 uses
     Civ.Types;
 
-{ Entry points so callers can index `[TerrainId]` without exposing
-  the raw array. Index 0..11 = base terrain; 12..23 = special resource. }
-function TerrainEntry(ParaIndex: Integer): TTerrainType;
-function WorkRule(ParaTerrain: Integer): Pointer;
-
 type
     TTerrainWorkRule = packed record
         IrrigationChange : SmallInt;
         IrrigationTurns  : SmallInt;
         MiningChange     : SmallInt;
         MiningTurns      : SmallInt;
-        RoadChange       : SmallInt;   { 0 by default (see below) }
+        RoadChange       : SmallInt;
         RoadTurns        : SmallInt;
     end;
 
+    { Named pointer type — Delphi does not accept `^T` as an inline return
+      or variable type. Every caller uses this name. }
+    PTerrainWorkRule = ^TTerrainWorkRule;
+
+function TerrainEntry(ParaIndex: Integer): TTerrainType;
+function WorkRule(ParaTerrain: Integer): PTerrainWorkRule;
+
+{ Tile-work helpers, ported from CONTROL.C. Used by the AI and by
+  Ctrl-side worker actions. TCivWorld is passed as an opaque pointer to
+  avoid a circular uses: Civ.World imports Civ.Terrains, not the reverse. }
+function WorkTileKind(ParaWorld: Pointer; ParaX, ParaY: Integer): Integer;
+function BuildOkTiles(ParaWorld: Pointer; ParaX, ParaY: Integer): Boolean;
+
 implementation
 
-{ Original GAME.C data. The first four SmallInts are the initializers
-  printed in GAME.C; the trailing two were zero-initialized BSS bytes.
-  Two facts confirm the 12-byte layout:
-    - CONTROL.C declares struct terrain_work_rule with all six fields.
-    - CITYMGT.C reads .value[0] and .value[2] — which is exactly
-      irrigation_change and mining_change under the 6-int layout. }
+uses
+    Civ.Core,
+    Civ.World;
+
 const
     ConstTerrains: array[0..23] of TTerrainType = (
         (Name: 'Desert';    MoveCost: 1; Defense: 2; Food: 0; Shields: 1; Trade: 0; F5: 1; F6: 14),
@@ -59,24 +65,24 @@ const
     );
 
     ConstWorkRules: array[0..17] of TTerrainWorkRule = (
-        (IrrigationChange: -2; IrrigationTurns:  5; MiningChange: -2; MiningTurns:  5; RoadChange: 0; RoadTurns: 0), { 0 Desert    }
-        (IrrigationChange:  0; IrrigationTurns:  0; MiningChange: -2; MiningTurns:  5; RoadChange: 0; RoadTurns: 0), { 1 Plains    }
-        (IrrigationChange:  2; IrrigationTurns: 15; MiningChange:  1; MiningTurns:  1; RoadChange: 0; RoadTurns: 0), { 2 Grassland }
-        (IrrigationChange: -2; IrrigationTurns:  5; MiningChange:  2; MiningTurns: 10; RoadChange: 0; RoadTurns: 0), { 3 Forest    }
-        (IrrigationChange:  0; IrrigationTurns:  1; MiningChange:  6; MiningTurns:  5; RoadChange: 0; RoadTurns: 0), { 4 Hills     }
-        (IrrigationChange: -1; IrrigationTurns:  5; MiningChange:  0; MiningTurns:  0; RoadChange: 0; RoadTurns: 0), { 5 Mountains }
-        (IrrigationChange: -2; IrrigationTurns: 10; MiningChange: -4; MiningTurns: 10; RoadChange: 0; RoadTurns: 0), { 6 Tundra    }
-        (IrrigationChange:  1; IrrigationTurns:  1; MiningChange: -1; MiningTurns:  0; RoadChange: 0; RoadTurns: 0), { 7 Arctic    }
-        (IrrigationChange: -2; IrrigationTurns: 10; MiningChange:  0; MiningTurns:  0; RoadChange: 0; RoadTurns: 0), { 8 Swamp     }
-        (IrrigationChange: -1; IrrigationTurns:  0; MiningChange: -1; MiningTurns:  0; RoadChange: 0; RoadTurns: 0), { 9 Jungle    }
-        (IrrigationChange:  0; IrrigationTurns:  0; MiningChange: -1; MiningTurns:  0; RoadChange: 0; RoadTurns: 0), { 10 Ocean    }
-        (IrrigationChange: -1; IrrigationTurns:  0; MiningChange:  0; MiningTurns:  0; RoadChange: 0; RoadTurns: 0), { 11 River    }
-        (IrrigationChange: 10; IrrigationTurns: 15; MiningChange:  2; MiningTurns: 15; RoadChange: 0; RoadTurns: 0), { 12 Oasis    }
-        (IrrigationChange:  0; IrrigationTurns:  0; MiningChange: 10; MiningTurns: 15; RoadChange: 0; RoadTurns: 0), { 13 Horses   }
-        (IrrigationChange:  2; IrrigationTurns: 15; MiningChange:  0; MiningTurns:  0; RoadChange: 0; RoadTurns: 0), { 14 Grassland}
-        (IrrigationChange: -1; IrrigationTurns:  0; MiningChange: -1; MiningTurns:  0; RoadChange: 0; RoadTurns: 0), { 15 Game     }
-        (IrrigationChange:  0; IrrigationTurns:  0; MiningChange: -2; MiningTurns:  5; RoadChange: 0; RoadTurns: 0), { 16 Coal     }
-        (IrrigationChange: -1; IrrigationTurns:  0; MiningChange:  0; MiningTurns:  1; RoadChange: 0; RoadTurns: 0)  { 17 Gold     }
+        (IrrigationChange: -2; IrrigationTurns:  5; MiningChange: -2; MiningTurns:  5; RoadChange: 0; RoadTurns: 0),
+        (IrrigationChange:  0; IrrigationTurns:  0; MiningChange: -2; MiningTurns:  5; RoadChange: 0; RoadTurns: 0),
+        (IrrigationChange:  2; IrrigationTurns: 15; MiningChange:  1; MiningTurns:  1; RoadChange: 0; RoadTurns: 0),
+        (IrrigationChange: -2; IrrigationTurns:  5; MiningChange:  2; MiningTurns: 10; RoadChange: 0; RoadTurns: 0),
+        (IrrigationChange:  0; IrrigationTurns:  1; MiningChange:  6; MiningTurns:  5; RoadChange: 0; RoadTurns: 0),
+        (IrrigationChange: -1; IrrigationTurns:  5; MiningChange:  0; MiningTurns:  0; RoadChange: 0; RoadTurns: 0),
+        (IrrigationChange: -2; IrrigationTurns: 10; MiningChange: -4; MiningTurns: 10; RoadChange: 0; RoadTurns: 0),
+        (IrrigationChange:  1; IrrigationTurns:  1; MiningChange: -1; MiningTurns:  0; RoadChange: 0; RoadTurns: 0),
+        (IrrigationChange: -2; IrrigationTurns: 10; MiningChange:  0; MiningTurns:  0; RoadChange: 0; RoadTurns: 0),
+        (IrrigationChange: -1; IrrigationTurns:  0; MiningChange: -1; MiningTurns:  0; RoadChange: 0; RoadTurns: 0),
+        (IrrigationChange:  0; IrrigationTurns:  0; MiningChange: -1; MiningTurns:  0; RoadChange: 0; RoadTurns: 0),
+        (IrrigationChange: -1; IrrigationTurns:  0; MiningChange:  0; MiningTurns:  0; RoadChange: 0; RoadTurns: 0),
+        (IrrigationChange: 10; IrrigationTurns: 15; MiningChange:  2; MiningTurns: 15; RoadChange: 0; RoadTurns: 0),
+        (IrrigationChange:  0; IrrigationTurns:  0; MiningChange: 10; MiningTurns: 15; RoadChange: 0; RoadTurns: 0),
+        (IrrigationChange:  2; IrrigationTurns: 15; MiningChange:  0; MiningTurns:  0; RoadChange: 0; RoadTurns: 0),
+        (IrrigationChange: -1; IrrigationTurns:  0; MiningChange: -1; MiningTurns:  0; RoadChange: 0; RoadTurns: 0),
+        (IrrigationChange:  0; IrrigationTurns:  0; MiningChange: -2; MiningTurns:  5; RoadChange: 0; RoadTurns: 0),
+        (IrrigationChange: -1; IrrigationTurns:  0; MiningChange:  0; MiningTurns:  1; RoadChange: 0; RoadTurns: 0)
     );
 
 function TerrainEntry(ParaIndex: Integer): TTerrainType;
@@ -89,14 +95,57 @@ begin
     Result := ConstTerrains[ParaIndex];
 end;
 
-function WorkRule(ParaTerrain: Integer): Pointer;
+function WorkRule(ParaTerrain: Integer): PTerrainWorkRule;
 begin
     if (ParaTerrain < 0) or (ParaTerrain > 17) then
-    begin
-        Result := nil;
-        Exit;
-    end;
+        Exit(nil);
     Result := @ConstWorkRules[ParaTerrain];
+end;
+
+function WorkTileKind(ParaWorld: Pointer; ParaX, ParaY: Integer): Integer;
+var
+    vWorld : TCivWorld;
+    vRule  : PTerrainWorkRule;
+    vTerrain : Integer;
+begin
+    vWorld := TCivWorld(ParaWorld);
+    if (vWorld.MapFlags(ParaX, ParaY) and 7) <> 0 then
+        Exit(0);
+    vTerrain := vWorld.TerrainAt(ParaX, ParaY);
+    vRule := WorkRule(vTerrain);
+    if vRule = nil then
+        Exit(0);
+    if vRule^.MiningChange <= -3 then
+        Exit(2);
+    if (vRule^.IrrigationChange = -2) and BuildOkTiles(ParaWorld, ParaX, ParaY) then
+        Exit(1);
+    Result := 0;
+end;
+
+function BuildOkTiles(ParaWorld: Pointer; ParaX, ParaY: Integer): Boolean;
+var
+    vWorld : TCivWorld;
+    vDir, vNX, vNY, vT, vF : Integer;
+begin
+    vWorld := TCivWorld(ParaWorld);
+    if vWorld.TerrainAt(ParaX, ParaY) = ConstTerrainRiver then
+        Exit(True);
+    for vDir := 1 to 8 do
+    begin
+        if (vDir and 1) = 0 then
+            Continue;
+        vNX := WrapX(ParaX + ConstSpiralX[vDir]);
+        vNY := ParaY + ConstSpiralY[vDir];
+        vT := vWorld.TerrainAt(vNX, vNY);
+        vF := vWorld.MapFlags(vNX, vNY);
+        if (vF and ConstTileCity) <> 0 then
+            Continue;
+        if (vT = ConstTerrainRiver) or (vT = ConstTerrainOcean) then
+            Exit(True);
+        if (vF and ConstTileIrrigation) <> 0 then
+            Exit(True);
+    end;
+    Result := False;
 end;
 
 end.

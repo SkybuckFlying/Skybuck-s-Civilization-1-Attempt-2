@@ -27,116 +27,114 @@ const
     ConstSaveFileSize    = 37856;   { 0x93e0 }
 
 type
-    { Every field is stored in SVE order. `packed record` guarantees
-      the layout matches the C globals exactly (SizeOf = 37856). }
+    { Byte-for-byte SVE layout. `packed record` prevents the compiler from
+      inserting padding; VerifyLayout checks the offsets that matter most. }
     TGameStateData = packed record
         // --- Header (16 bytes @ 0x0000)
-        TurnTick            : SmallInt;   { 0x0000 }
-        CivNow              : SmallInt;   { 0x0002 }
-        HumanSet            : SmallInt;   { 0x0004 }
-        MapRngState         : SmallInt;   { 0x0006 }
-        Year                : SmallInt;   { 0x0008 }
-        CurTier             : SmallInt;   { 0x000A }
-        Players             : SmallInt;   { 0x000C }
-        SelectedIndex       : SmallInt;   { 0x000E }
+        TurnTick            : SmallInt;
+        CivNow              : SmallInt;
+        HumanSet            : SmallInt;
+        MapRngState         : SmallInt;
+        Year                : SmallInt;
+        CurTier             : SmallInt;
+        Players             : SmallInt;
+        SelectedIndex       : SmallInt;
 
         // --- Names (296 bytes @ 0x0010)
-        LeaderNames         : array[0..7] of TCStr14;   { 0x0010, 112 }
-        CivNames            : array[0..7] of TCStr12;   { 0x0080,  96 }
-        CivAdjectives       : array[0..7] of array[0..10] of AnsiChar; { 0x00E0, 88 }
+        LeaderNames         : array[0..7] of TCStr14;
+        CivNames            : array[0..7] of TCStr12;
+        CivAdjectives       : array[0..7] of array[0..10] of AnsiChar;
 
         // --- Per-civ scalar arrays
-        Money               : array[0..7] of SmallInt;  { 0x0138 }
-        CivResearchTally    : array[0..7] of SmallInt;  { 0x0148 }
-        ForcesPresent       : array[0..7, 0..27] of SmallInt; { 0x0158 }
-        CivUnitsOrdered     : array[0..7, 0..27] of SmallInt; { 0x0318 }
-        TechCount           : array[0..7] of SmallInt;  { 0x04D8 }
-        AdvancesKnown       : array[0..7, 0..4] of SmallInt;  { 0x04E8 }
-        CivGov              : array[0..7] of SmallInt;  { 0x0538 }
-        CivAreaPlan         : array[0..7, 0..15] of SmallInt; { 0x0548 }
-        Treaties            : array[0..7, 0..7] of SmallInt;  { 0x0648 }
-        CityCount           : array[0..7] of SmallInt;  { 0x06C8 }
-        TroopsTotal         : array[0..7] of SmallInt;  { 0x06D8 }
-        CivHeldCells        : array[0..7] of SmallInt;  { 0x06E8 }
-        CivSettlersN        : array[0..7] of SmallInt;  { 0x06F8 }
-        Citizens            : array[0..7] of SmallInt;  { 0x0708 }
-        MilitaryTable       : array[0..7] of SmallInt;  { 0x0718 }
-        NationRatings       : array[0..7] of SmallInt;  { 0x0728 }
-        CivToll             : array[0..7] of SmallInt;  { 0x0738 }
-        CivRatings          : array[0..7] of SmallInt;  { 0x0748 }
-        LastMetTurn         : array[0..7] of SmallInt;  { 0x0758 }
-        XCap                : array[0..7] of SmallInt;  { 0x0768 }
-        CivTribeOf          : array[0..7] of SmallInt;  { 0x0778 }
-        DefendersIsland     : array[0..7, 0..15] of SmallInt; { 0x0788 }
-        CivContAttackers    : array[0..7, 0..15] of SmallInt; { 0x0888 }
-        AiContinentTowns    : array[0..7, 0..15] of SmallInt; { 0x0988 }
-        ContinentSpan       : array[0..1, 0..63] of SmallInt; { 0x0A88 }
-        AiZonePlaces        : array[0..15] of SmallInt; { 0x0B88 }
+        Money               : array[0..7] of SmallInt;
+        CivResearchTally    : array[0..7] of SmallInt;
+        ForcesPresent       : array[0..7, 0..27] of SmallInt;
+        CivUnitsOrdered     : array[0..7, 0..27] of SmallInt;
+        TechCount           : array[0..7] of SmallInt;
+        AdvancesKnown       : array[0..7, 0..4] of SmallInt;
+        CivGov              : array[0..7] of SmallInt;
+        CivAreaPlan         : array[0..7, 0..15] of SmallInt;
+        Treaties            : array[0..7, 0..7] of SmallInt;
+        CityCount           : array[0..7] of SmallInt;
+        TroopsTotal         : array[0..7] of SmallInt;
+        CivHeldCells        : array[0..7] of SmallInt;
+        CivSettlersN        : array[0..7] of SmallInt;
+        Citizens            : array[0..7] of SmallInt;
+        MilitaryTable       : array[0..7] of SmallInt;
+        NationRatings       : array[0..7] of SmallInt;
+        CivToll             : array[0..7] of SmallInt;
+        CivRatings          : array[0..7] of SmallInt;
+        LastMetTurn         : array[0..7] of SmallInt;
+        XCap                : array[0..7] of SmallInt;
+        CivTribeOf          : array[0..7] of SmallInt;
+        DefendersIsland     : array[0..7, 0..15] of SmallInt;
+        CivContAttackers    : array[0..7, 0..15] of SmallInt;
+        AiContinentTowns    : array[0..7, 0..15] of SmallInt;
+        ContinentSpan       : array[0..1, 0..63] of SmallInt;
+        AiZonePlaces        : array[0..15] of SmallInt;
 
         // --- Far arrays
-        PowerHistory        : array[0..149, 0..7] of Byte; { 0x0BA8 }
-        WarRecord           : array[0..149, 0..7] of Byte; { 0x1058 }
+        PowerHistory        : array[0..149, 0..7] of Byte;
+        WarRecord           : array[0..149, 0..7] of Byte;
 
         // --- Core record arrays
-        TownBuf             : array[0..127] of TCity;     { 0x1508 }
-        UtTypes             : array[0..27] of TUnitType;  { 0x2308 }
-        ArmyData            : array[0..7, 0..127] of TUnit; { 0x26C0 }
+        TownBuf             : array[0..127] of TCity;
+        UtTypes             : array[0..27] of TUnitType;
+        ArmyData            : array[0..7, 0..127] of TUnit;
 
         // --- Exploration + AI memory
-        MapVisibleTo        : array[0..79, 0..49] of ShortInt; { 0x56C0 }
-        SpotClasses         : array[0..7, 0..15] of ShortInt;  { 0x6660 }
-        AiCampSiteWeights   : array[0..7, 0..15] of ShortInt;  { 0x66E0 }
-        CampXPos            : array[0..7, 0..15] of ShortInt;  { 0x6760 }
-        CivLotY             : array[0..7, 0..15] of ShortInt;  { 0x67E0 }
-        AdvanceOwners       : array[0..71] of SmallInt;        { 0x6860 }
-        Killed              : array[0..7, 0..7] of SmallInt;   { 0x68F0 }
-        PlaceName           : array[0..255] of TCStr13;        { 0x6970 }
-        ReplayLength        : SmallInt;                        { 0x7670 }
-        ReplayLog           : array[0..4095] of ShortInt;      { 0x7672 }
-        MarvelSite          : array[0..21] of SmallInt;        { 0x8672 }
-        UnitLosses          : array[0..7, 0..27] of SmallInt;  { 0x869E }
-        AdvSource           : array[0..7, 0..71] of ShortInt;  { 0x885E }
+        MapVisibleTo        : array[0..79, 0..49] of ShortInt;
+        SpotClasses         : array[0..7, 0..15] of ShortInt;
+        AiCampSiteWeights   : array[0..7, 0..15] of ShortInt;
+        CampXPos            : array[0..7, 0..15] of ShortInt;
+        CivLotY             : array[0..7, 0..15] of ShortInt;
+        AdvanceOwners       : array[0..71] of SmallInt;
+        Killed              : array[0..7, 0..7] of SmallInt;
+        PlaceName           : array[0..255] of TCStr13;
+        ReplayLength        : SmallInt;
+        ReplayLog           : array[0..4095] of ShortInt;
+        MarvelSite          : array[0..21] of SmallInt;
+        UnitLosses          : array[0..7, 0..27] of SmallInt;
+        AdvSource           : array[0..7, 0..71] of ShortInt;
 
         // --- Environment / globals
-        Polluted            : SmallInt;                        { 0x8A9E }
-        WarmLevels          : SmallInt;                        { 0x8AA0 }
-        Warming             : SmallInt;                        { 0x8AA2 }
-        Debug               : SmallInt;                        { 0x8AA4 }
-        BlockGroundWay      : array[0..19, 0..12] of ShortInt; { 0x8AA6 }
-        MaxRating           : SmallInt;                        { 0x8BAA }
-        AdvancesFuture      : SmallInt;                        { 0x8BAC }
-        RuleOptions         : SmallInt;                        { 0x8BAE }
-        Sci                 : array[0..7] of SmallInt;         { 0x8BB0 }
-        NextEventTurn       : SmallInt;                        { 0x8BC0 }
-        HistoryRating       : array[0..7] of SmallInt;         { 0x8BC2 }
+        Polluted            : SmallInt;
+        WarmLevels          : SmallInt;
+        Warming             : SmallInt;
+        Debug               : SmallInt;
+        BlockGroundWay      : array[0..19, 0..12] of Byte;   { unsigned in C }
+        MaxRating           : SmallInt;
+        AdvancesFuture      : SmallInt;
+        RuleOptions         : SmallInt;
+        Sci                 : array[0..7] of SmallInt;
+        NextEventTurn       : SmallInt;
+        HistoryRating       : array[0..7] of SmallInt;
 
         // --- Spaceship
-        Spaceships          : array[0..7, 0..14, 0..11] of ShortInt; { 0x8BD2 }
-        GameFlags           : SmallInt;                        { 0x9172 }
-        ShipSuccess         : SmallInt;                        { 0x9174 }
-        AiShipSuccess       : SmallInt;                        { 0x9176 }
-        SpaceshipArriveDates: array[0..7] of SmallInt;         { 0x9178 }
-        FloorsPalace        : array[0..11] of SmallInt;        { 0x9188 }
-        SectionGrades       : array[0..11] of SmallInt;        { 0x91A0 }
-        CitySiteX           : array[0..255] of ShortInt;       { 0x91B8 }
-        CitySiteY           : array[0..255] of ShortInt;       { 0x92B8 }
-        PalaceStage         : SmallInt;                        { 0x93B8 }
-        PlayerPeaceRun      : SmallInt;                        { 0x93BA }
-        CivTotal            : SmallInt;                        { 0x93BC }
-        SpaceShipHabitation : array[0..7] of SmallInt;         { 0x93BE }
-        LiftoffWhen         : array[0..7] of SmallInt;         { 0x93CE }
-        CivFlagsBits        : SmallInt;                        { 0x93DE }
+        Spaceships          : array[0..7, 0..14, 0..11] of ShortInt;
+        GameFlags           : SmallInt;
+        ShipSuccess         : SmallInt;
+        AiShipSuccess       : SmallInt;
+        SpaceshipArriveDates: array[0..7] of SmallInt;
+        FloorsPalace        : array[0..11] of SmallInt;
+        SectionGrades       : array[0..11] of SmallInt;
+        CitySiteX           : array[0..255] of ShortInt;
+        CitySiteY           : array[0..255] of ShortInt;
+        PalaceStage         : SmallInt;
+        PlayerPeaceRun      : SmallInt;
+        CivTotal            : SmallInt;
+        SpaceShipHabitation : array[0..7] of SmallInt;
+        LiftoffWhen         : array[0..7] of SmallInt;
+        CivFlagsBits        : SmallInt;
     end;
 
     TCivilizationGameState = class
     public
-        { Single, byte-exact state container. Public field because this
-          is a raw record container, not a service object — accessors
-          would be pure boilerplate with no encapsulation benefit. }
+        { Public because it is a raw record container, not a service; adding
+          per-field properties would be pure boilerplate. }
         mData : TGameStateData;
 
         constructor Create;
-
         procedure Clear;
 
         procedure LoadFromFile(const ParaFileName: string);
@@ -144,7 +142,6 @@ type
         procedure LoadFromStream(ParaStream: TStream);
         procedure SaveToStream(ParaStream: TStream);
 
-        { Convenience helpers. }
         function LeaderName(ParaCiv: Integer): string;
         function CivName(ParaCiv: Integer): string;
         function CivAdjective(ParaCiv: Integer): string;
@@ -156,53 +153,47 @@ type
 
 implementation
 
-{ ---- Layout validation table ----------------------------------------------
-  Each (offset, actual-offset) pair is checked at startup. This proves the
-  packed record matches the SVE offset table in
-  book/src/formats/sve_offset_table.md. }
-type
-    TLayoutCheck = record
-        Field : PAnsiChar;
-        Offset: Integer;
-    end;
-
+{ `VerifyLayout` is called by the demo before anything else. `AssertLayout`
+  runs once at unit initialization so layout errors surface even in debug
+  builds that fail early. Both use NativeUInt to compute offsets —
+  PtrUInt / PtrInt are not declared in Delphi 13's System unit. }
 procedure AssertLayout;
 var
     vD : TGameStateData;
-    vBase : PtrUInt;
+    vBase : NativeUInt;
     vB : TCivilizationGameState;
 begin
-    vBase := PtrUInt(@vD);
-    Assert(PtrUInt(@vD.TurnTick            ) - vBase = $0000);
-    Assert(PtrUInt(@vD.CivNow              ) - vBase = $0002);
-    Assert(PtrUInt(@vD.HumanSet            ) - vBase = $0004);
-    Assert(PtrUInt(@vD.LeaderNames         ) - vBase = $0010);
-    Assert(PtrUInt(@vD.CivNames            ) - vBase = $0080);
-    Assert(PtrUInt(@vD.CivAdjectives       ) - vBase = $00E0);
-    Assert(PtrUInt(@vD.Money               ) - vBase = $0138);
-    Assert(PtrUInt(@vD.ForcesPresent       ) - vBase = $0158);
-    Assert(PtrUInt(@vD.AdvancesKnown       ) - vBase = $04E8);
-    Assert(PtrUInt(@vD.Treaties            ) - vBase = $0648);
-    Assert(PtrUInt(@vD.CivTribeOf          ) - vBase = $0778);
-    Assert(PtrUInt(@vD.PowerHistory        ) - vBase = $0BA8);
-    Assert(PtrUInt(@vD.WarRecord           ) - vBase = $1058);
-    Assert(PtrUInt(@vD.TownBuf             ) - vBase = $1508);
-    Assert(PtrUInt(@vD.UtTypes             ) - vBase = $2308);
-    Assert(PtrUInt(@vD.ArmyData            ) - vBase = $26C0);
-    Assert(PtrUInt(@vD.MapVisibleTo        ) - vBase = $56C0);
-    Assert(PtrUInt(@vD.AdvanceOwners       ) - vBase = $6860);
-    Assert(PtrUInt(@vD.PlaceName           ) - vBase = $6970);
-    Assert(PtrUInt(@vD.ReplayLength        ) - vBase = $7670);
-    Assert(PtrUInt(@vD.MarvelSite          ) - vBase = $8672);
-    Assert(PtrUInt(@vD.Polluted            ) - vBase = $8A9E);
-    Assert(PtrUInt(@vD.Spaceships          ) - vBase = $8BD2);
-    Assert(PtrUInt(@vD.GameFlags           ) - vBase = $9172);
-    Assert(PtrUInt(@vD.CitySiteX           ) - vBase = $91B8);
-    Assert(PtrUInt(@vD.CivFlagsBits        ) - vBase = $93DE);
+    vBase := NativeUInt(@vD);
+    Assert(NativeUInt(@vD.TurnTick            ) - vBase = $0000);
+    Assert(NativeUInt(@vD.CivNow              ) - vBase = $0002);
+    Assert(NativeUInt(@vD.HumanSet            ) - vBase = $0004);
+    Assert(NativeUInt(@vD.LeaderNames         ) - vBase = $0010);
+    Assert(NativeUInt(@vD.CivNames            ) - vBase = $0080);
+    Assert(NativeUInt(@vD.CivAdjectives       ) - vBase = $00E0);
+    Assert(NativeUInt(@vD.Money               ) - vBase = $0138);
+    Assert(NativeUInt(@vD.ForcesPresent       ) - vBase = $0158);
+    Assert(NativeUInt(@vD.AdvancesKnown       ) - vBase = $04E8);
+    Assert(NativeUInt(@vD.Treaties            ) - vBase = $0648);
+    Assert(NativeUInt(@vD.CivTribeOf          ) - vBase = $0778);
+    Assert(NativeUInt(@vD.PowerHistory        ) - vBase = $0BA8);
+    Assert(NativeUInt(@vD.WarRecord           ) - vBase = $1058);
+    Assert(NativeUInt(@vD.TownBuf             ) - vBase = $1508);
+    Assert(NativeUInt(@vD.UtTypes             ) - vBase = $2308);
+    Assert(NativeUInt(@vD.ArmyData            ) - vBase = $26C0);
+    Assert(NativeUInt(@vD.MapVisibleTo        ) - vBase = $56C0);
+    Assert(NativeUInt(@vD.AdvanceOwners       ) - vBase = $6860);
+    Assert(NativeUInt(@vD.PlaceName           ) - vBase = $6970);
+    Assert(NativeUInt(@vD.ReplayLength        ) - vBase = $7670);
+    Assert(NativeUInt(@vD.MarvelSite          ) - vBase = $8672);
+    Assert(NativeUInt(@vD.Polluted            ) - vBase = $8A9E);
+    Assert(NativeUInt(@vD.Spaceships          ) - vBase = $8BD2);
+    Assert(NativeUInt(@vD.GameFlags           ) - vBase = $9172);
+    Assert(NativeUInt(@vD.CitySiteX           ) - vBase = $91B8);
+    Assert(NativeUInt(@vD.CivFlagsBits        ) - vBase = $93DE);
     Assert(SizeOf(TGameStateData) = ConstSaveFileSize);
-    { Reference vB only to suppress "hint" for unused local. }
     vB := nil;
-    if vB <> nil then Assert(False);
+    if vB <> nil then
+        Assert(False);
 end;
 
 constructor TCivilizationGameState.Create;
@@ -314,9 +305,9 @@ end;
 class function TCivilizationGameState.VerifyLayout(out ParaMessage: string): Boolean;
 var
     vD : TGameStateData;
-    vBase : PtrUInt;
+    vBase : NativeUInt;
 begin
-    vBase := PtrUInt(@vD);
+    vBase := NativeUInt(@vD);
     ParaMessage := '';
     if SizeOf(TGameStateData) <> ConstSaveFileSize then
     begin
@@ -324,17 +315,17 @@ begin
             [SizeOf(TGameStateData), ConstSaveFileSize]);
         Exit(False);
     end;
-    if PtrUInt(@vD.TownBuf) - vBase <> $1508 then
+    if NativeUInt(@vD.TownBuf) - vBase <> $1508 then
     begin
         ParaMessage := 'TownBuf offset mismatch';
         Exit(False);
     end;
-    if PtrUInt(@vD.ArmyData) - vBase <> $26C0 then
+    if NativeUInt(@vD.ArmyData) - vBase <> $26C0 then
     begin
         ParaMessage := 'ArmyData offset mismatch';
         Exit(False);
     end;
-    if PtrUInt(@vD.MapVisibleTo) - vBase <> $56C0 then
+    if NativeUInt(@vD.MapVisibleTo) - vBase <> $56C0 then
     begin
         ParaMessage := 'MapVisibleTo offset mismatch';
         Exit(False);
